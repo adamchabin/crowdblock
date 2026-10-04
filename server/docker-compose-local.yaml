@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: crowdblock
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # The latest build of the dev branch. Update: docker compose pull && docker compose up -d
+
+###################################################################################
+# 🧪 K6 Performance Testing Sequence (Integration Test)
+# Cel: Testowanie pełnego cyklu życia API: rejestracja -> raportowanie -> pobieranie statystyk.
+# Wymagania: Upewnij się, że kontener 'server' działa i jest dostępny na porcie 8080.
+# 
+# SCENARIUSZE:
+# 1. GET /ips (poczytanie):  k6 run server/k6/lists.js
+#    Rekomendacje: k6 run server/k6/lists.js --env DURATION=1m --env RATE=100
+# 2. POST /reports (pisanie): k6 run server/k6/reports.js
+#    Rekomendacje: k6 run server/k6/reports.js --env DURATION=1m --env RATE=50
+# 3. Mieszane (Mix): k6 run server/k6/mixed.js
+#    Rekomendacje: k6 run server/k6/mixed.js --env DURATION=5m --env READ_RATE=200 --env WRITE_RATE=100
+##################################################################################
+  # For `go run` (run.sh) start only the databases: docker compose up -d postgres redis
+  server:
+    image: crowdblock-server:dev-local
+    build: ./Dockerfile
+    container_name: crowdblock-server
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres:5432/crowdblock?sslmode=disable
+      REDIS_ADDR: redis:6379
+      SEED_DEV_DATA: "1"   # test users and keys, sample reports (seed.sql)
+      DEBUG: "false"
+      # Registration by e-mail (the Register button) needs all four. Taken from
+      # the shell or from a .env file next to this file (not committed):
+      #   SMTP_FROM=crowdblock@example.com  SMTP_HOST=smtp.example.com:587
+      #   SMTP_USERNAME=...                 SMTP_PASSWORD=...
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
