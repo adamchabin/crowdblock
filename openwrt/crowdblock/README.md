@@ -83,7 +83,7 @@ instead of copying:
 
 ```sh
 # in the OpenWrt SDK directory, once
-echo "src-link crowdblock /path/to/community-fw/openwrt" >> feeds.conf.default
+echo "src-link crowdblock /path/to/crowdblock/openwrt" >> feeds.conf.default
 ./scripts/feeds update crowdblock
 ./scripts/feeds install -a -p crowdblock
 make defconfig

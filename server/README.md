@@ -6,8 +6,16 @@ with country (GeoIP) and sources.
 
 ## Running locally
 
+The latest build of the `dev` branch, with PostgreSQL and Redis:
+
 ```sh
-docker compose up -d          # PostgreSQL + Redis
+docker compose pull && docker compose up -d
+```
+
+Or from the sources (`go run`):
+
+```sh
+docker compose up -d postgres redis
 ./scripts/update_geoip.sh     # optional: country database (DB-IP Lite)
 ./run.sh                      # go run . with development data (seed.sql)
 ```

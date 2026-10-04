@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: communityfw
+      POSTGRES_DB: crowdblock
     ports:
       - "5432:5432"
     volumes:
@@ -26,6 +26,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # The latest build of the dev branch. Update: docker compose pull && docker compose up -d
+  # For `go run` (run.sh) start only the databases: docker compose up -d postgres redis
+  server:
+    image: ghcr.io/adamchabin/crowdblock-server:dev-latest
+    container_name: crowdblock-server
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres:5432/crowdblock?sslmode=disable
+      REDIS_ADDR: redis:6379
+      SEED_DEV_DATA: "1"   # test users and keys, sample reports (seed.sql)
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
