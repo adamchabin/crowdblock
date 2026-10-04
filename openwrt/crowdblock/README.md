@@ -61,7 +61,7 @@ Authorization: Basic base64(crowdblock:api_key)
 
 - `minutes` comes from the `report_window` option (rounded up to minutes).
 - `country` (ISO 3166-1 alpha-2) is optional – the server adds it when it has
-  a GeoIP database (`scripts/update_geoip.sh`, DB-IP Lite, CC BY 4.0).
+  a GeoIP database (`server/scripts/update_geoip.sh`, DB-IP Lite, CC BY 4.0).
 - `sources` is optional – what detected the attacks in the report window
   (reporter plugin names); shown in LuCI.
 - The list is sorted by `distinct_reporters`, descending – when `max_entries`
@@ -122,7 +122,7 @@ nft list set inet crowdblock v4
 
 **Testing:** addresses from the documentation ranges (`192.0.2.0/24`,
 `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`) – including the
-defaults of `scripts/report_ips.sh` – are deliberately ignored as reserved.
+defaults of `server/scripts/report_ips.sh` – are deliberately ignored as reserved.
 To test blocking, report a public address you don't use.
 
 ## TODO

@@ -31,3 +31,34 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# --- crowdblock ---
+
+# Build outputs (go build / reporter/build_reporter.sh)
+/server/server
+/server/crowdblock-server
+/reporter/reporter
+/reporter/crowdblock-reporter
+
+# GeoIP database: downloaded by server/scripts/update_geoip.sh (8 MB, CC BY 4.0)
+/server/geoip/*.mmdb
+/server/geoip/*.mmdb.tmp
+
+# Local environment (direnv) with database credentials
+.envrc
+
+# Personal upload / deploy scripts (hosts, users)
+upload_*.sh
+
+# API key cached by server/scripts/show_ips.sh
+server/scripts/.show_ips_api_key
+
+# OpenWrt packages copied around for installing
+*.apk
+*.ipk
+
+# Python bytecode (openwrt/luci-app-crowdblock/check-i18n.py)
+__pycache__/
+
+# Claude Code local settings
+.claude/settings.local.json
