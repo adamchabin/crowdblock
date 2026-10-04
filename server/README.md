@@ -12,6 +12,35 @@ docker compose up -d          # PostgreSQL + Redis
 ./run.sh                      # go run . with development data (seed.sql)
 ```
 
+## Docker
+
+Released images (`linux/amd64`, `linux/arm64`) are published to
+`ghcr.io/adamchabin/crowdblock-server`; they include the GeoIP database
+current at build time.
+
+```sh
+docker run -d -p 8080:8080 \
+  -e DATABASE_URL='postgres://user:pass@db:5432/crowdblock' \
+  -e REDIS_ADDR=redis:6379 \
+  ghcr.io/adamchabin/crowdblock-server:latest
+```
+
+Build locally from the repository root: `docker build -f server/Dockerfile -t crowdblock-server .`
+
+### Releasing
+
+`.github/workflows/server.yml` runs the tests and builds the image on every
+change of the server. Pushing a version tag publishes the image
+(`1.2.3`, `1.2`, `latest`) and creates a GitHub Release:
+
+```sh
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
+
+## Configuration
+
 | Variable | Default | |
 |---|---|---|
 | `DATABASE_URL` | – | PostgreSQL; the database and schema are created on start |

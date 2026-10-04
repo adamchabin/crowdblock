@@ -29,10 +29,15 @@ const (
 	apiKeyCacheTTL    = 60 * time.Second
 )
 
+// Set at build time: go build -ldflags "-X main.version=v1.2.3"
+var version = "dev"
+
 var db *pgxpool.Pool
 var rdb *redis.Client
 
 func main() {
+	log.Printf("crowdblock server %s", version)
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("DATABASE_URL not set")
