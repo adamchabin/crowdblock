@@ -80,6 +80,8 @@ func main() {
 
 	openGeoIP()
 
+	go runListGenerator(ctx, listRefreshInterval())
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/register", handleRegister)
 	mux.HandleFunc("POST /api/v1/api-keys", handleCreateAPIKey)
@@ -437,7 +439,26 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := db.Query(r.Context(), `
+	// Precomputed by the list generator (lists.go); computed here only until
+	// the first generation or when Redis is unavailable.
+	if serveCachedList(w, r, minReporters, minutes) {
+		return
+	}
+
+	result, err := queryIPList(r.Context(), minutes, minReporters)
+	if err != nil {
+		log.Printf("list query failed: %v", err)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSONCompressed(w, r, http.StatusOK, result)
+}
+
+// queryIPList returns the addresses reported by at least minReporters
+// distinct users within the last `minutes` minutes, the most reported first.
+func queryIPList(ctx context.Context, minutes, minReporters int) ([]ipListEntry, error) {
+	rows, err := db.Query(ctx, `
 		SELECT abbrev(ip), COUNT(DISTINCT user_id) AS reporters,
 			COALESCE(array_agg(DISTINCT source ORDER BY source) FILTER (WHERE source IS NOT NULL), '{}')
 		FROM ip_reports
@@ -448,8 +469,7 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		minutes, minReporters,
 	)
 	if err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -457,18 +477,12 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var e ipListEntry
 		if err := rows.Scan(&e.IP, &e.DistinctReporters, &e.Sources); err != nil {
-			http.Error(w, "server error", http.StatusInternalServerError)
-			return
+			return nil, err
 		}
 		e.Country = countryOf(e.IP)
 		result = append(result, e)
 	}
-	if err := rows.Err(); err != nil {
-		http.Error(w, "server error", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSONCompressed(w, r, http.StatusOK, result)
+	return result, rows.Err()
 }
 
 // ---------- HELPERS ----------

@@ -29,16 +29,24 @@ running the OpenWrt client. Fine as a prototype; not ready at that scale.
 
 ### 2. `GET /ips` computes the list on every request
 
-- [ ] Each of the ~170 req/s aggregates all reports in the window (~1 M rows
-      per hour). The `(ip, reported_at)` index doesn't help a filter on time
-      alone.
+- [x] Each of the ~170 req/s aggregated all reports in the window (~1 M rows
+      per hour). Now 4 aggregations per `LIST_REFRESH`, whatever the traffic.
+- [ ] The `(ip, reported_at)` index doesn't help a filter on time alone – the
+      4 queries (the 7-day one especially) need an index on `reported_at`
+      (see 3).
 - [x] Every router sent its own `min_reporters` / `minutes`, so responses
       couldn't be cached. Now fixed tiers: `min_reporters` 1/5/10/20/50,
       `minutes` 60/360/1440/10080 – 20 lists to precompute.
-- [ ] Compute the list in the background every 30–60 s for a few fixed
-      thresholds, keep it in memory already gzipped, serve it with `ETag`
-      (`304` = no transfer). Later: delta sync (changes since the last sync).
-      The server then becomes stateless and can sit behind a CDN.
+- [x] Lists computed in the background every `LIST_REFRESH` (1 min) for all
+      20 combinations, stored in Redis plain and gzipped with an `ETag`;
+      `If-None-Match` → `304`. One query per window, the thresholds are cut
+      from it.
+- [ ] Router client: send `If-None-Match` (keep the ETag in the state), so an
+      unchanged list costs no transfer.
+- [ ] Delta sync (changes since the last sync).
+- [ ] CDN in front of `GET /ips` (responses are already per-combination and
+      revalidated with ETags; the API key is the obstacle – a public list or
+      signed URLs).
 
 ### 3. `ip_reports` grows forever
 

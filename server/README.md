@@ -55,6 +55,7 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 | `DATABASE_URL` | – | PostgreSQL; the database and schema are created on start |
 | `REDIS_ADDR` | `localhost:6379` | API key cache and report aggregation |
 | `LISTEN_ADDR` | `:8080` | |
+| `LIST_REFRESH` | `1m` | how often the IP lists are regenerated (Go duration) |
 | `GEOIP_DB` | `geoip/dbip-country-lite.mmdb` | relative to the working directory |
 | `SEED_DEV_DATA` | – | `1` loads `seed.sql`: test users and keys, sample reports – development only |
 
@@ -68,7 +69,15 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 | `GET /api/v1/ips?min_reporters=N&minutes=M` | API key | addresses reported by ≥ N distinct users in the last M minutes; N: 1, 5, 10, 20, 50; M: 60, 360, 1440, 10080 (1 h, 6 h, 24 h, 7 days) |
 
 The API key goes in the `X-API-Key` header or as the Basic auth password.
-`GET /api/v1/ips` is gzip-compressed for clients sending `Accept-Encoding: gzip`.
+
+`GET /api/v1/ips` doesn't query PostgreSQL per request: a background job
+regenerates all 20 lists (5 thresholds × 4 windows) every `LIST_REFRESH` and
+stores each in Redis twice, plain and gzipped, with its ETag
+(`ips:<min_reporters>:<minutes>:{json,gz,etag}`, expiring after 5 rounds).
+Requests get the gzip version with `Accept-Encoding: gzip`, and `304 Not
+Modified` with `If-None-Match`. With several server instances only one
+generates per round (lock `ips:lock`). Until the first round, or without
+Redis, the list is computed from PostgreSQL.
 
 `scripts/` has curl helpers for all endpoints (`create_user.sh`,
 `create_api_key.sh`, `report_ips.sh`, `list_ips.sh`, `show_ips.sh`).
