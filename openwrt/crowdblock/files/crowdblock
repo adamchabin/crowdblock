@@ -1,0 +1,388 @@
+#!/usr/bin/ucode
+// crowdblock - crowd-sourced IP blocklist client for OpenWrt
+//
+//   crowdblock run       daemon (started by /etc/init.d/crowdblock)
+//   crowdblock sync      one-shot download + apply
+//   crowdblock status    show state and drop counters
+//   crowdblock teardown  remove nftables table (unblocks everything)
+//   crowdblock pause IP  stop blocking IP (until resumed)
+//   crowdblock resume IP block a paused IP again
+'use strict';
+
+import * as fs from 'fs';
+import * as uloop from 'uloop';
+import { connect } from 'ubus';
+import { rand, srand } from 'math';
+
+import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
+import { whitelist, whitelisted } from 'crowdblock.ip';
+import { fetch_blocklist, VERSION } from 'crowdblock.api';
+import * as nft from 'crowdblock.nft';
+
+const STATE_DIR = '/tmp/crowdblock';
+const STATE_FILE = STATE_DIR + '/state.json';
+
+function log(fmt, ...args) {
+	print(sprintf(fmt, ...args), '\n');
+}
+
+// Unlike die(), doesn't append the source location to the message.
+function fatal(msg) {
+	warn(msg, '\n');
+	exit(1);
+}
+
+// --- state: { entries: { ip: expires_at }, reports: { ip: count },
+//              countries: { ip: "CN" }, sources: { ip: [ "auth", ... ] },
+//              last_sync, last_error } ------------------------------------
+// `reports`, `countries` and `sources` are from the last time the address
+// was on the server list (shown in LuCI).
+
+function load_state() {
+	let f = fs.open(STATE_FILE, 'r');
+	let st;
+
+	if (f) {
+		try { st = json(f.read('all')); } catch (e) { }
+		f.close();
+	}
+
+	if (type(st) != 'object' || type(st.entries) != 'object')
+		st = { entries: {}, last_sync: null, last_error: null };
+
+	// Maps added in later versions.
+	for (let k in [ 'reports', 'countries', 'sources' ])
+		if (type(st[k]) != 'object')
+			st[k] = {};
+
+	return st;
+}
+
+function save_state(st) {
+	let tmp = STATE_FILE + '.tmp';
+	let f = fs.open(tmp, 'w');
+	if (!f)
+		return;
+
+	f.write(sprintf('%J', st));
+	f.close();
+	fs.rename(tmp, STATE_FILE);
+}
+
+// --- whitelist ----------------------------------------------------------
+
+// The router's own addresses, delegated prefixes and upstream DNS servers.
+function local_addresses() {
+	let res = [];
+	let conn = connect();
+	if (!conn)
+		return res;
+
+	let dump = conn.call('network.interface', 'dump');
+
+	for (let iface in dump?.interface ?? []) {
+		for (let a in iface['ipv4-address'] ?? [])
+			push(res, a.address);
+		for (let a in iface['ipv6-address'] ?? [])
+			push(res, a.address);
+		for (let a in iface['ipv6-prefix-assignment'] ?? [])
+			push(res, `${a.address}/${a.mask}`);
+		for (let a in iface['dns-server'] ?? [])
+			push(res, a);
+	}
+
+	conn.disconnect();
+	return res;
+}
+
+function build_whitelist(cfg) {
+	let entries = [];
+
+	for (let list in [ cfg.whitelist, local_addresses() ])
+		for (let e in list)
+			push(entries, e);
+
+	return whitelist(entries, (e) => log('ignoring invalid whitelist entry: %s', e));
+}
+
+// --- sync ---------------------------------------------------------------
+
+function forget(st, ip) {
+	delete st.entries[ip];
+	delete st.reports[ip];
+	delete st.countries[ip];
+	delete st.sources[ip];
+}
+
+function drop_expired(st, now) {
+	for (let ip in keys(st.entries))
+		if (st.entries[ip] <= now)
+			forget(st, ip);
+}
+
+// Merges the server list into the state. Returns stats.
+function merge(cfg, st, list, wl, now) {
+	let stats = { added: 0, refreshed: 0, invalid: 0, whitelisted: 0, below: 0, full: 0 };
+	let count = length(keys(st.entries));
+	let expires = now + cfg.block_time;
+
+	for (let e in list) {
+		if (type(e) != 'object' || type(e.ip) != 'string') {
+			stats.invalid++;
+			continue;
+		}
+
+		// Don't rely on the server-side filter alone.
+		if (!(type(e.reports) in [ 'int', 'double' ]) || e.reports < cfg.min_reports) {
+			stats.below++;
+			continue;
+		}
+
+		let bytes = iptoarr(e.ip);
+		if (!bytes) {
+			stats.invalid++;
+			continue;
+		}
+
+		if (whitelisted(wl, bytes)) {
+			stats.whitelisted++;
+			continue;
+		}
+
+		let ip = arrtoip(bytes);  // canonical form
+
+		if (exists(st.entries, ip)) {
+			st.entries[ip] = expires;
+			st.reports[ip] = e.reports;
+			if (e.country)
+				st.countries[ip] = e.country;
+			if (e.sources)
+				st.sources[ip] = e.sources;
+			stats.refreshed++;
+		}
+		else if (count < cfg.max_entries) {
+			st.entries[ip] = expires;
+			st.reports[ip] = e.reports;
+			if (e.country)
+				st.countries[ip] = e.country;
+			if (e.sources)
+				st.sources[ip] = e.sources;
+			stats.added++;
+			count++;
+		}
+		else {
+			stats.full++;
+		}
+	}
+
+	return stats;
+}
+
+// Entries may have been whitelisted after they were blocked.
+function purge_whitelisted(st, wl) {
+	let n = 0;
+
+	for (let ip in keys(st.entries)) {
+		if (whitelisted(wl, iptoarr(ip))) {
+			forget(st, ip);
+			n++;
+		}
+	}
+
+	return n;
+}
+
+// Returns true on success.
+function sync(cfg, st) {
+	let now = time();
+	drop_expired(st, now);
+
+	let res = fetch_blocklist(cfg);
+	let err = res.error;
+
+	if (err) {
+		// Nothing to do in nft: existing entries keep blocking until
+		// their kernel timeout runs out.
+		st.last_error = err;
+		save_state(st);
+		log('sync failed: %s', err);
+		return false;
+	}
+
+	let wl = build_whitelist(cfg);
+	let purged = purge_whitelisted(st, wl);
+	let stats = merge(cfg, st, res.entries, wl, now);
+
+	// `/etc/init.d/firewall stop|restart` (fw4 flush) deletes all nftables
+	// tables, ours included - recreate it instead of failing until restart.
+	if (!nft.exists()) {
+		log('nftables table missing (firewall restarted?), recreating it');
+		err = nft.setup(cfg);
+	}
+
+	if (!err)
+		err = nft.apply(st.entries, now, load_paused());
+
+	st.last_sync = now;
+	st.last_error = err;
+	save_state(st);
+
+	if (err) {
+		log('nft update failed: %s', err);
+		return false;
+	}
+
+	log('sync ok: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
+		length(keys(st.entries)), stats.added, stats.refreshed,
+		stats.whitelisted, purged, stats.invalid,
+		stats.full ? sprintf(', %d dropped: max_entries reached', stats.full) : '');
+
+	return true;
+}
+
+// --- commands -------------------------------------------------------------
+
+function jitter(sec, pct) {
+	return int(sec * 1000 * (1 + (rand() % (pct + 1)) / 100.0));
+}
+
+function cmd_run(cfg) {
+	let st = load_state();
+	let err = nft.setup(cfg);
+
+	if (err)
+		fatal(`cannot create nftables table: ${err}`);
+
+	// After a restart, restore what we had before the first download.
+	drop_expired(st, time());
+	err = nft.apply(st.entries, time(), load_paused());
+	if (err)
+		log('cannot restore previous blocks: %s', err);
+
+	log('crowdblock %s started: server=%s min_reports=%d block_time=%ds interval=%ds',
+		VERSION, cfg.server, cfg.min_reports, cfg.block_time, cfg.sync_interval);
+
+	srand(time());
+	uloop.init();
+
+	let failures = 0;
+	let timer;
+
+	timer = uloop.timer(1000 + rand() % 30000, function() {
+		if (sync(cfg, st)) {
+			failures = 0;
+			timer.set(jitter(cfg.sync_interval, 10));
+		}
+		else {
+			// Exponential backoff: 60s, 120s, 240s ... capped at sync_interval.
+			// Thousands of routers must not hammer a server that is down.
+			let delay = 60 * (1 << (failures < 6 ? failures : 6));
+			failures++;
+			timer.set(jitter(delay < cfg.sync_interval ? delay : cfg.sync_interval, 25));
+		}
+	});
+
+	uloop.run();
+}
+
+function cmd_sync(cfg) {
+	let st = load_state();
+
+	// Recreating an existing table would drop the current blocks (also those
+	// of a running daemon) for as long as the download keeps failing.
+	if (!nft.exists()) {
+		let err = nft.setup(cfg);
+		if (err)
+			fatal(`cannot create nftables table: ${err}`);
+
+		drop_expired(st, time());
+		nft.apply(st.entries, time(), load_paused());
+	}
+
+	exit(sync(cfg, st) ? 0 : 1);
+}
+
+// The paused list is the source of truth; the nft change applies it right
+// away instead of waiting for the next sync.
+function cmd_pause(arg, pause) {
+	let bytes = iptoarr(arg ?? '');
+	if (!bytes)
+		fatal(`invalid IP address: ${arg}`);
+
+	let ip = arrtoip(bytes);  // canonical form, as in the state
+	let paused = filter(load_paused(), (p) => p != ip);
+
+	if (pause)
+		push(paused, ip);
+
+	if (!save_paused(paused))
+		fatal('cannot save the list of paused addresses');
+
+	if (!nft.exists())
+		return;
+
+	if (pause) {
+		// Fails when the address is not blocked right now - nothing to undo.
+		nft.unblock(ip);
+	}
+	else {
+		let ttl = (load_state().entries[ip] ?? 0) - time();
+		let err = (ttl > 0) ? nft.block(ip, ttl) : null;
+
+		if (err)
+			fatal(err);
+	}
+}
+
+function cmd_status() {
+	let st = load_state();
+	let now = time();
+	let paused = load_paused();
+	let v4 = 0, v6 = 0, p = 0;
+
+	for (let ip, expires in st.entries)
+		if (expires <= now)
+			continue;
+		else if (ip in paused)
+			p++;
+		else
+			(index(ip, ':') >= 0) ? v6++ : v4++;
+
+	log('blocked:    %d IPv4, %d IPv6 (%d paused)', v4, v6, p);
+	log('last sync:  %s', st.last_sync ? sprintf('%ds ago', now - st.last_sync) : 'never');
+	log('last error: %s', st.last_error ?? '-');
+
+	for (let line in nft.counters())
+		log('%s', line);
+}
+
+function usage() {
+	warn('Usage: crowdblock run|sync|status|teardown|pause IP|resume IP\n');
+	exit(1);
+}
+
+fs.mkdir(STATE_DIR, 0o700);
+
+let command = ARGV[0];
+
+if (command == 'status') {
+	cmd_status();
+}
+else if (command == 'teardown') {
+	let err = nft.teardown();
+	if (err)
+		fatal(err);
+}
+else if (command == 'pause' || command == 'resume') {
+	cmd_pause(ARGV[1], command == 'pause');
+}
+else if (command == 'run' || command == 'sync') {
+	let res = load_config();
+	if (res.error)
+		fatal(`config error: ${res.error}`);
+
+	(command == 'run') ? cmd_run(res.cfg) : cmd_sync(res.cfg);
+}
+else {
+	usage();
+}
