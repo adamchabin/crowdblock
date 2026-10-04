@@ -2,6 +2,7 @@
 'use strict';
 
 import { popen, open, stat, unlink, rmdir, mkdtemp, rename } from 'fs';
+import { debug, ms_since } from 'crowdblock.config';
 
 export const VERSION = '0.1.0';
 
@@ -107,15 +108,15 @@ function cat_command(file) {
 }
 
 // Checks a downloaded body without unpacking it to a file: valid gzip and at
-// most MAX_BODY bytes unpacked (a gzip bomb can't fill the RAM). Returns null
-// or an error.
+// most MAX_BODY bytes unpacked (a gzip bomb can't fill the RAM). Returns
+// { size, unpacked } or { error }.
 function check_body(file, rcfile) {
 	let size = stat(file)?.size;
 	if (size == null)
-		return 'no response body';
+		return { error: 'no response body' };
 
 	if (size > MAX_BODY)
-		return 'response too large';
+		return { error: 'response too large' };
 
 	// The exit code of gunzip, not of head / wc, tells whether it was valid.
 	let p = popen(sprintf('(%s 2>/dev/null; echo $? > %s) | head -c %d | wc -c',
@@ -125,12 +126,12 @@ function check_body(file, rcfile) {
 		p.close();
 
 	if (unpacked == null || unpacked > MAX_BODY)
-		return 'response too large';
+		return { error: 'response too large' };
 
 	if (trim(read_file(rcfile) ?? '') != '0')
-		return 'cannot unpack the gzip response';
+		return { error: 'cannot unpack the gzip response' };
 
-	return null;
+	return { size, unpacked };
 }
 
 // Same as the server's ETag: the first 16 hex digits of the SHA-256 of the
@@ -237,7 +238,7 @@ function set_hash(ips, file) {
 // changed and new ones, checks it against the server's count and set hash
 // and replaces LIST_FILE with it, packed. Returns { etag, upserted, removed }
 // or { error } (the caller then fetches the full list).
-function apply_delta(file, dir) {
+function apply_delta(cfg, file, dir) {
 	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 'r');
 	let d;
 	try { d = json(p); } catch (e) { }
@@ -262,7 +263,7 @@ function apply_delta(file, dir) {
 	if (!out)
 		return { error: 'cannot write ' + plain };
 
-	let ips = [], first = true;
+	let ips = [], first = true, base = 0;
 	let emit = function(line, ip) {
 		out.write((first ? '[\n' : ',\n') + line);
 		first = false;
@@ -270,9 +271,11 @@ function apply_delta(file, dir) {
 	};
 
 	let err = list_lines(LIST_FILE, function(e, line) {
+		base++;
 		if (type(e) == 'object' && type(e.ip) == 'string' && !drop[e.ip])
 			emit(line, e.ip);
 	});
+	let kept = length(ips);
 
 	for (let e in upsert)
 		emit(sprintf('%J', e), e.ip);
@@ -280,7 +283,11 @@ function apply_delta(file, dir) {
 	out.write(first ? '[]\n' : '\n]\n');
 	out.close();
 
-	if (!err && (length(ips) != d.count || set_hash(ips, dir + '/ips') != d.set_hash))
+	let hash = err ? null : set_hash(ips, dir + '/ips');
+	debug(cfg, 'delta: saved list %d entries, kept %d, %d new or changed, %d removed -> %d entries (server: %d), set hash %s (server: %s)',
+		base, kept, length(upsert), length(d.remove), length(ips), d.count, hash, d.set_hash);
+
+	if (!err && (length(ips) != d.count || hash != d.set_hash))
 		err = 'delta does not match the server list';
 
 	if (!err && system(sprintf('gzip -c %s > %s', shell_quote(plain), shell_quote(plain + '.gz'))) != 0)
@@ -304,16 +311,32 @@ function http_get(cfg, url, etag) {
 		return { error: 'cannot create a temporary directory in ' + TMP_DIR };
 
 	let files = { body: dir + '/body', err: dir + '/err', rc: dir + '/rc' };
+	let start = clock(true);
+
+	debug(cfg, 'fetch %s, %s', replace(url, /^.*\/api\//, '/api/'),
+		etag ? 'If-None-Match ' + etag : 'full list requested');
+
 	let res = download(cfg, url, files.body, files.err, etag);
 
-	if (!res.error && !res.not_modified) {
-		let err = check_body(files.body, files.rc);
+	if (res.error) {
+		debug(cfg, 'fetch failed after %d ms: %s', ms_since(start), res.error);
+	}
+	else if (res.not_modified) {
+		debug(cfg, 'fetch: 304 not modified, %d ms', ms_since(start));
+	}
+	else {
+		let body = check_body(files.body, files.rc);
+		let kind = body.error ? null : body_kind(files.body);
 
-		if (err) {
-			res = { error: err };
+		if (!body.error)
+			debug(cfg, 'fetch: %s, %d B received, %d B unpacked, %d ms',
+				(kind == '{') ? 'delta' : 'full list', body.size, body.unpacked, ms_since(start));
+
+		if (body.error) {
+			res = { error: body.error };
 		}
-		else if (body_kind(files.body) == '{') {
-			let d = apply_delta(files.body, dir);
+		else if (kind == '{') {
+			let d = apply_delta(cfg, files.body, dir);
 			res = d.error
 				? { error: d.error, retry_full: true }
 				: { etag: d.etag, delta: { upserted: d.upserted, removed: d.removed } };
@@ -396,6 +419,7 @@ function fetch_blocklist(cfg, etag) {
 	let delta_failed = null;
 	if (res.retry_full) {
 		delta_failed = res.error;
+		debug(cfg, 'delta rejected (%s), fetching the full list', delta_failed);
 		res = http_get(cfg, url, null);
 	}
 

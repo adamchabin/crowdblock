@@ -14,7 +14,7 @@ import * as uloop from 'uloop';
 import { connect } from 'ubus';
 import { rand, srand } from 'math';
 
-import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
+import { load as load_config, load_paused, save_paused, debug, ms_since } from 'crowdblock.config';
 import { whitelist, whitelisted } from 'crowdblock.ip';
 import { fetch_blocklist, each_entry, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
@@ -115,10 +115,21 @@ function forget(st, ip) {
 	delete st.sources[ip];
 }
 
+// Returns the number of dropped entries.
 function drop_expired(st, now) {
+	let n = 0;
 	for (let ip in keys(st.entries))
-		if (st.entries[ip] <= now)
+		if (st.entries[ip] <= now) {
 			forget(st, ip);
+			n++;
+		}
+	return n;
+}
+
+// "1.2.3.4, 5.6.7.8 and 3 more" – addresses in debug lines, at most `max`.
+function some(list, max) {
+	let shown = join(', ', slice(list, 0, max));
+	return (length(list) > max) ? sprintf('%s and %d more', shown, length(list) - max) : shown;
 }
 
 // Merges the downloaded list into the state, entry by entry (the list is
@@ -126,6 +137,7 @@ function drop_expired(st, now) {
 // couldn't be read.
 function merge(cfg, st, wl, now) {
 	let stats = { added: 0, refreshed: 0, invalid: 0, whitelisted: 0, below: 0, full: 0 };
+	let seen = { added: [], whitelisted: [], below: [], full: [] };  // for debug
 	let count = length(keys(st.entries));
 	let expires = now + cfg.block_time;
 
@@ -138,6 +150,7 @@ function merge(cfg, st, wl, now) {
 		// Don't rely on the server-side filter alone.
 		if (!(type(e.reports) in [ 'int', 'double' ]) || e.reports < cfg.min_reports) {
 			stats.below++;
+			push(seen.below, e.ip);
 			return;
 		}
 
@@ -149,6 +162,7 @@ function merge(cfg, st, wl, now) {
 
 		if (whitelisted(wl, bytes)) {
 			stats.whitelisted++;
+			push(seen.whitelisted, e.ip);
 			return;
 		}
 
@@ -171,12 +185,21 @@ function merge(cfg, st, wl, now) {
 			if (e.sources)
 				st.sources[ip] = e.sources;
 			stats.added++;
+			push(seen.added, ip);
 			count++;
 		}
 		else {
 			stats.full++;
+			push(seen.full, ip);
 		}
 	});
+
+	debug(cfg, 'merge: %d on the list: %d new, %d refreshed, %d whitelisted, %d below min_reports, %d invalid, %d over max_entries',
+		stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full,
+		stats.added, stats.refreshed, stats.whitelisted, stats.below, stats.invalid, stats.full);
+	for (let k in [ 'added', 'whitelisted', 'below', 'full' ])
+		if (length(seen[k]))
+			debug(cfg, 'merge: %s: %s', k, some(seen[k], 20));
 
 	return stats;
 }
@@ -198,7 +221,9 @@ function purge_whitelisted(st, wl) {
 // Returns true on success.
 function sync(cfg, st) {
 	let now = time();
-	drop_expired(st, now);
+	let start = clock(true);
+	let expired = drop_expired(st, now);
+	debug(cfg, 'sync: %d entries in the state, %d expired since the last sync', length(keys(st.entries)), expired);
 
 	let res = fetch_blocklist(cfg, st.list_etag);
 	let err = res.error;
@@ -214,6 +239,8 @@ function sync(cfg, st) {
 
 	let wl = build_whitelist(cfg);
 	let purged = purge_whitelisted(st, wl);
+	if (purged)
+		debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
 	let stats = merge(cfg, st, wl, now);
 
 	if (stats.error) {
@@ -230,8 +257,22 @@ function sync(cfg, st) {
 		err = nft.setup(cfg);
 	}
 
-	if (!err)
-		err = nft.apply(st.entries, now, load_paused());
+	if (!err) {
+		let paused = load_paused();
+		let nft_start = clock(true);
+		err = nft.apply(st.entries, now, paused);
+
+		if (cfg.debug) {
+			let v4 = 0, v6 = 0, p = 0;
+			for (let ip in st.entries)
+				if (ip in paused)
+					p++;
+				else
+					(index(ip, ':') >= 0) ? v6++ : v4++;
+			debug(cfg, 'nftables: %d IPv4 + %d IPv6 addresses set, %d paused, %d ms%s',
+				v4, v6, p, ms_since(nft_start), err ? ' – ' + err : '');
+		}
+	}
 
 	st.list_etag = res.etag;
 	st.last_sync = now;
@@ -242,6 +283,8 @@ function sync(cfg, st) {
 		log('nft update failed: %s', err);
 		return false;
 	}
+
+	debug(cfg, 'sync: done in %d ms', ms_since(start));
 
 	let how = res.not_modified ? ' (list not modified)'
 		: res.delta ? sprintf(' (delta: %d changed, %d removed)', res.delta.upserted, res.delta.removed)

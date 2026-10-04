@@ -23,6 +23,7 @@
 	"Country": "Kraj",
 	"Country data: ": "Dane o krajach: ",
 	"Crowdblock": "Crowdblock",
+	"Debug": "Debug",
 	"Distinct users who reported the address in the report window": "Liczba różnych użytkowników, którzy zgłosili adres w oknie zgłoszeń",
 	"Enable": "Włącz",
 	"Enable crowdblock in the settings first": "Najpierw włącz crowdblock w ustawieniach",
@@ -61,5 +62,6 @@
 	"Sync now": "Synchronizuj teraz",
 	"Verify TLS certificate": "Weryfikuj certyfikat TLS",
 	"What detected the attacks: the plugins of the reporters": "Co wykryło ataki: wtyczki zgłaszających",
-	"Whitelist": "Biała lista"
+	"Whitelist": "Biała lista",
+	"Writes the details of every sync – what was downloaded (full list, delta, not modified) and how it was merged – to the system log: logread -e crowdblock": "Zapisuje szczegóły każdej synchronizacji – co zostało pobrane (pełna lista, różnica, bez zmian) i jak zostało połączone z istniejącą listą – w logu systemowym: logread -e crowdblock"
 }

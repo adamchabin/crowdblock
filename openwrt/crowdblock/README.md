@@ -132,6 +132,7 @@ uci commit crowdblock
 crowdblock status          # number of blocks, last sync, drop counters
 crowdblock sync            # manual sync
 crowdblock pause IP        # stop blocking IP (until resumed)
+uci set crowdblock.main.debug=1; uci commit crowdblock   # sync details in the log (LuCI: Advanced → Debug)
 crowdblock resume IP       # block a paused IP again
 logread -e crowdblock      # daemon log
 nft list set inet crowdblock v4

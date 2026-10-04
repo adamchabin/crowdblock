@@ -62,6 +62,7 @@ function load() {
 		timeout:       int_opt(s.timeout, 30, 1, 300),
 		block_forward: bool_opt(s.block_forward, true),
 		verify_tls:    bool_opt(s.verify_tls, true),
+		debug:         bool_opt(s.debug, false),
 		whitelist:     (type(wl) == 'array') ? wl : [ wl ],
 	};
 
@@ -108,4 +109,17 @@ function save_paused(list) {
 	return c.commit('crowdblock');
 }
 
-export { parse_duration, load, load_paused, save_paused };
+// Option debug: details of every sync in the system log, prefixed "DEBUG"
+// (logread -e crowdblock).
+function debug(cfg, fmt, ...args) {
+	if (cfg?.debug)
+		print('DEBUG ', sprintf(fmt, ...args), '\n');
+}
+
+// Milliseconds since `start` = clock(true).
+function ms_since(start) {
+	let now = clock(true);
+	return (now[0] - start[0]) * 1000 + int((now[1] - start[1]) / 1000000);
+}
+
+export { parse_duration, load, load_paused, save_paused, debug, ms_since };

@@ -128,6 +128,9 @@ return view.extend({
 		o.datatype = 'range(1,300)';
 		o.placeholder = '30';
 
+		o = s.taboption('advanced', form.Flag, 'debug', _('Debug'),
+			_('Writes the details of every sync – what was downloaded (full list, delta, not modified) and how it was merged – to the system log: logread -e crowdblock'));
+
 		o = s.taboption('advanced', form.DynamicList, 'whitelist', _('Whitelist'),
 			_('Addresses and networks that are never blocked. Private ranges and the router\'s own addresses are whitelisted automatically.'));
 		o.datatype = 'ipaddr';
