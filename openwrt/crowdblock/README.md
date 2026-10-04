@@ -54,10 +54,16 @@ Authorization: Basic base64(crowdblock:api_key)
 
 200 OK
 [
-  { "ip": "198.51.100.23", "distinct_reporters": 17, "country": "CN", "sources": ["auth", "fail2ban"] },
-  { "ip": "2001:db8::1",   "distinct_reporters": 6 }
+{"ip":"198.51.100.23","distinct_reporters":17,"country":"CN","sources":["auth","fail2ban"]},
+{"ip":"2001:db8::1","distinct_reporters":6}
 ]
 ```
+
+- One entry per line (still a plain JSON array). The client keeps the list
+  packed (`/tmp/crowdblock/list`) and parses it line by line while
+  unpacking, so its memory use doesn't grow with the list (5 000 addresses:
+  ~8 MiB peak instead of ~17 MiB). A list in a single line (older servers) is
+  parsed as a whole.
 
 - The server serves fixed thresholds only, so that every list can be
   precomputed: `min_reporters` 1, 5, 10, 20 or 50 (option `min_reports`) and
@@ -67,6 +73,10 @@ Authorization: Basic base64(crowdblock:api_key)
   a GeoIP database (`server/scripts/update_geoip.sh`, DB-IP Lite, CC BY 4.0).
 - `sources` is optional – what detected the attacks in the report window
   (reporter plugin names); shown in LuCI.
+- `ETag` is the first 16 hex digits of the SHA-256 of the uncompressed body,
+  quoted (`"97f8fef9892e2058"`). The client computes it from the saved list
+  (`sha256sum`) and sends `If-None-Match`; on `304 Not Modified` it reuses
+  `/tmp/crowdblock/list`, so an unchanged list costs no transfer.
 - The list is sorted by `distinct_reporters`, descending – when `max_entries`
   is reached, the client keeps the most trusted entries.
 - `distinct_reporters` is the number of **distinct** reporters, not reports.

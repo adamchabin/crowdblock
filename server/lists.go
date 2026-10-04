@@ -43,15 +43,43 @@ type listPayload struct {
 	etag  string
 }
 
-func newListPayload(entries []ipListEntry) (listPayload, error) {
-	if entries == nil {
-		entries = []ipListEntry{} // "[]", not "null": clients expect an array
+// encodeList writes the list as a JSON array with one entry per line:
+//
+//	[
+//	{"ip":"1.2.3.4","distinct_reporters":3},
+//	{"ip":"5.6.7.8","distinct_reporters":1}
+//	]
+//
+// Plain JSON for any client, and the OpenWrt client can parse it line by
+// line while unpacking, without holding the whole list in memory.
+func encodeList(entries []ipListEntry) ([]byte, error) {
+	if len(entries) == 0 {
+		return []byte("[]\n"), nil // not "null": clients expect an array
 	}
 
-	var plain bytes.Buffer
-	if err := json.NewEncoder(&plain).Encode(entries); err != nil {
+	var b bytes.Buffer
+	b.WriteString("[\n")
+	for i, e := range entries {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return nil, err
+		}
+		b.Write(line)
+		if i < len(entries)-1 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("]\n")
+	return b.Bytes(), nil
+}
+
+func newListPayload(entries []ipListEntry) (listPayload, error) {
+	encoded, err := encodeList(entries)
+	if err != nil {
 		return listPayload{}, err
 	}
+	plain := bytes.NewBuffer(encoded)
 
 	var gz bytes.Buffer
 	zw := gzip.NewWriter(&gz)
@@ -62,6 +90,8 @@ func newListPayload(entries []ipListEntry) (listPayload, error) {
 		return listPayload{}, err
 	}
 
+	// Part of the API contract: clients compute the same value from the
+	// unpacked body (the OpenWrt client with sha256sum) to send If-None-Match.
 	sum := sha256.Sum256(plain.Bytes())
 	return listPayload{
 		plain: plain.Bytes(),
@@ -178,9 +208,8 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 // serveCachedList writes the precomputed list and returns true, or returns
 // false (nothing written) when it is not in Redis.
 func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minutes int) bool {
-	gzipped := acceptsGzip(r)
 	kind := "json"
-	if gzipped {
+	if acceptsGzip(r) {
 		kind = "gz"
 	}
 
@@ -195,6 +224,21 @@ func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 		return false
 	}
 
+	writeList(w, r, etag, []byte(body), kind == "gz")
+	return true
+}
+
+// writeListPayload sends a list computed for this request (no cache).
+func writeListPayload(w http.ResponseWriter, r *http.Request, p listPayload) {
+	if acceptsGzip(r) {
+		writeList(w, r, p.etag, p.gz, true)
+	} else {
+		writeList(w, r, p.etag, p.plain, false)
+	}
+}
+
+// writeList sends one version of a list, or 304 if the client has it.
+func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte, gzipped bool) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Add("Vary", "Accept-Encoding")
@@ -204,15 +248,14 @@ func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
-		return true
+		return
 	}
 
 	if gzipped {
 		h.Set("Content-Encoding", "gzip")
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(body))
-	return true
+	_, _ = w.Write(body)
 }
 
 func hostname() string {

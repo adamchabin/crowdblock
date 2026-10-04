@@ -41,9 +41,38 @@ running the OpenWrt client. Fine as a prototype; not ready at that scale.
       20 combinations, stored in Redis plain and gzipped with an `ETag`;
       `If-None-Match` → `304`. One query per window, the thresholds are cut
       from it.
-- [ ] Router client: send `If-None-Match` (keep the ETag in the state), so an
-      unchanged list costs no transfer.
-- [ ] Delta sync (changes since the last sync).
+- [x] Router client sends `If-None-Match` (ETag kept in the state, list saved
+      packed in `/tmp/crowdblock/list`): an unchanged list costs no transfer.
+- [x] List with one entry per line, parsed by the router line by line while
+      unpacking: 5 000 addresses ~8 MiB peak instead of ~17 MiB (and growing
+      linearly – 20 000 would have been ~55–60 MiB, too much for 128 MiB
+      routers); `/tmp` 580 KiB instead of 944 KiB.
+- [ ] Delta sync – see below. At scale `304` will be rare: the list changes
+      with every generation (every minute) as reports keep coming, so a router
+      syncing every 10 min almost always downloads the whole list, while the
+      changes are a few percent of it (20 000 addresses at 170 req/s: ~240
+      Mbit/s full vs a few Mbit/s of deltas).
+
+#### Delta sync design
+
+- Each generation gets a version number. For every combination the server
+  stores in Redis the diff to the previous generation (`added`, `removed`,
+  optionally `changed` reporters / sources) and keeps the last ~60
+  generations (1 h).
+- `GET /ips?…&since=<version>`: the server merges the diffs from that version
+  to the current one; for an unknown or too old version (restart, history
+  lost) it returns the full list.
+- Blocks last `block_time` since an address was last on the list, so the
+  router keeps the full set of current addresses locally: `added` joins the
+  set, `removed` leaves it (its block expires by itself), every sync
+  refreshes the expiry of the whole set. Deltas save transfer and parsing,
+  not the router's state.
+- The response carries the count and a hash of the whole current set; after
+  applying the diff the router checks them and falls back to the full list
+  on a mismatch – otherwise inconsistencies would pile up silently.
+- CDN-friendly: the URL with `since=` determines the response.
+- The full list stays (first sync, restarts, fallback), so its line-by-line
+  parsing remains the memory-critical path.
 - [ ] CDN in front of `GET /ips` (responses are already per-combination and
       revalidated with ETags; the API key is the obstacle – a public list or
       signed URLs).
@@ -68,6 +97,52 @@ running the OpenWrt client. Fine as a prototype; not ready at that scale.
       8 MiB read buffer on every sync is heavy. Fine on the Flint2.
 - [ ] Legal: IP addresses are personal data in the EU (GDPR). A public list
       of "attackers" needs a legal basis and a delisting procedure.
+
+## Later – less important
+
+### Split the server: API + background worker, reports queued in Redis
+
+Not a performance need today: the benchmark gave ~12 000 `POST /reports`/s
+against ~280/s estimated for 100 000 users. Worth it for resilience. Do it
+after the blockers above, or when there is a real signal: PostgreSQL CPU high
+because of inserts, writes in the thousands per second, or the API having to
+keep working during database maintenance.
+
+What it gives:
+
+- The API keeps accepting reports when PostgreSQL is down, migrating or
+  overloaded (the lists are already served from Redis).
+- Batched writes: the worker takes e.g. 1 000 reports and writes them with one
+  `COPY` – much cheaper for PostgreSQL than single `INSERT`s.
+- Bursts (a botnet wave) are absorbed by the queue.
+- A natural home for the list generator and, later, retention.
+
+Costs and pitfalls:
+
+- Redis then holds data, not just cache: it needs persistence (AOF,
+  `fsync` every second), otherwise a Redis crash loses the queue.
+- At-least-once delivery – a report may be inserted twice. Harmless here
+  (distinct reporters are counted).
+- New things to monitor: queue lag and length (~100 MB per hour of worker
+  downtime at 1 M reports/h).
+- The API still needs PostgreSQL for registration, API key creation and key
+  lookups on a cache miss (unless accounts also move to Redis).
+- Two components to deploy, scale and debug.
+
+How:
+
+- [ ] Redis Streams instead of RabbitMQ: `XADD` in the API, `XREADGROUP` +
+      `XACK` in the worker (consumer groups, acks and redelivery of pending
+      messages built in, no new infrastructure).
+- [ ] One binary and image with roles: `-role api|worker|all`. `all` (default)
+      for development and small deployments; in production N × `api` behind a
+      load balancer and 1–2 × `worker`.
+- [ ] Worker: draining reports, generating lists, retention.
+- [ ] Remove the dead `maybeBlacklist` path (see above) on the way.
+
+Cheaper intermediate step: buffer reports in the process and write them in
+batches every second – most of the batching gain without new infrastructure,
+at the cost of losing that second of reports if the process crashes.
 
 ## Already in good shape
 

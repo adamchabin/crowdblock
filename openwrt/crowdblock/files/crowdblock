@@ -16,7 +16,7 @@ import { rand, srand } from 'math';
 
 import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
 import { whitelist, whitelisted } from 'crowdblock.ip';
-import { fetch_blocklist, VERSION } from 'crowdblock.api';
+import { fetch_blocklist, each_entry, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
 
 const STATE_DIR = '/tmp/crowdblock';
@@ -34,9 +34,10 @@ function fatal(msg) {
 
 // --- state: { entries: { ip: expires_at }, reports: { ip: count },
 //              countries: { ip: "CN" }, sources: { ip: [ "auth", ... ] },
-//              last_sync, last_error } ------------------------------------
+//              list_etag, last_sync, last_error } -------------------------
 // `reports`, `countries` and `sources` are from the last time the address
-// was on the server list (shown in LuCI).
+// was on the server list (shown in LuCI). `list_etag` identifies the list
+// saved in /tmp/crowdblock/list.json (sent as If-None-Match).
 
 function load_state() {
 	let f = fs.open(STATE_FILE, 'r');
@@ -120,33 +121,35 @@ function drop_expired(st, now) {
 			forget(st, ip);
 }
 
-// Merges the server list into the state. Returns stats.
-function merge(cfg, st, list, wl, now) {
+// Merges the downloaded list into the state, entry by entry (the list is
+// never held in memory as a whole). Returns stats, with `error` if the list
+// couldn't be read.
+function merge(cfg, st, wl, now) {
 	let stats = { added: 0, refreshed: 0, invalid: 0, whitelisted: 0, below: 0, full: 0 };
 	let count = length(keys(st.entries));
 	let expires = now + cfg.block_time;
 
-	for (let e in list) {
+	stats.error = each_entry(function(e) {
 		if (type(e) != 'object' || type(e.ip) != 'string') {
 			stats.invalid++;
-			continue;
+			return;
 		}
 
 		// Don't rely on the server-side filter alone.
 		if (!(type(e.reports) in [ 'int', 'double' ]) || e.reports < cfg.min_reports) {
 			stats.below++;
-			continue;
+			return;
 		}
 
 		let bytes = iptoarr(e.ip);
 		if (!bytes) {
 			stats.invalid++;
-			continue;
+			return;
 		}
 
 		if (whitelisted(wl, bytes)) {
 			stats.whitelisted++;
-			continue;
+			return;
 		}
 
 		let ip = arrtoip(bytes);  // canonical form
@@ -173,7 +176,7 @@ function merge(cfg, st, list, wl, now) {
 		else {
 			stats.full++;
 		}
-	}
+	});
 
 	return stats;
 }
@@ -197,7 +200,7 @@ function sync(cfg, st) {
 	let now = time();
 	drop_expired(st, now);
 
-	let res = fetch_blocklist(cfg);
+	let res = fetch_blocklist(cfg, st.list_etag);
 	let err = res.error;
 
 	if (err) {
@@ -211,7 +214,14 @@ function sync(cfg, st) {
 
 	let wl = build_whitelist(cfg);
 	let purged = purge_whitelisted(st, wl);
-	let stats = merge(cfg, st, res.entries, wl, now);
+	let stats = merge(cfg, st, wl, now);
+
+	if (stats.error) {
+		st.last_error = stats.error;
+		save_state(st);
+		log('sync failed: %s', stats.error);
+		return false;
+	}
 
 	// `/etc/init.d/firewall stop|restart` (fw4 flush) deletes all nftables
 	// tables, ours included - recreate it instead of failing until restart.
@@ -223,6 +233,7 @@ function sync(cfg, st) {
 	if (!err)
 		err = nft.apply(st.entries, now, load_paused());
 
+	st.list_etag = res.etag;
 	st.last_sync = now;
 	st.last_error = err;
 	save_state(st);
@@ -232,7 +243,8 @@ function sync(cfg, st) {
 		return false;
 	}
 
-	log('sync ok: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
+	log('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
+		res.not_modified ? ' (list not modified)' : '',
 		length(keys(st.entries)), stats.added, stats.refreshed,
 		stats.whitelisted, purged, stats.invalid,
 		stats.full ? sprintf(', %d dropped: max_entries reached', stats.full) : '');

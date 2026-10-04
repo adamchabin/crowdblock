@@ -75,7 +75,10 @@ regenerates all 20 lists (5 thresholds × 4 windows) every `LIST_REFRESH` and
 stores each in Redis twice, plain and gzipped, with its ETag
 (`ips:<min_reporters>:<minutes>:{json,gz,etag}`, expiring after 5 rounds).
 Requests get the gzip version with `Accept-Encoding: gzip`, and `304 Not
-Modified` with `If-None-Match`. With several server instances only one
+Modified` with `If-None-Match`. The ETag is the first 16 hex digits of the
+SHA-256 of the uncompressed body, quoted – clients may compute it themselves
+(the OpenWrt client does), so keep it that way. The list is a JSON array with
+one entry per line, so that small clients can parse it line by line. With several server instances only one
 generates per round (lock `ips:lock`). Until the first round, or without
 Redis, the list is computed from PostgreSQL.
 

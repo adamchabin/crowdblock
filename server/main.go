@@ -1,7 +1,6 @@
 package main
 
 import (
-	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -452,7 +451,12 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSONCompressed(w, r, http.StatusOK, result)
+	p, err := newListPayload(result)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	writeListPayload(w, r, p)
 }
 
 // queryIPList returns the addresses reported by at least minReporters
@@ -504,24 +508,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-// writeJSONCompressed is writeJSON with gzip for clients that accept it - for
-// large responses (the IP list: ~300 KiB for 5000 entries, ~45 KiB gzipped).
-func writeJSONCompressed(w http.ResponseWriter, r *http.Request, status int, v any) {
-	w.Header().Add("Vary", "Accept-Encoding")
-	if !acceptsGzip(r) {
-		writeJSON(w, status, v)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Encoding", "gzip")
-	w.WriteHeader(status)
-
-	gz := gzip.NewWriter(w)
-	_ = json.NewEncoder(gz).Encode(v)
-	_ = gz.Close()
 }
 
 // acceptsGzip: "Accept-Encoding: gzip" or "gzip, deflate, br" (q=0 disables).

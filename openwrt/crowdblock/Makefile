@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=crowdblock
 PKG_VERSION:=0.1.0
-PKG_RELEASE:=12
+PKG_RELEASE:=14
 
 PKG_MAINTAINER:=Your Name <you@example.org>
 PKG_LICENSE:=GPL-2.0-or-later
