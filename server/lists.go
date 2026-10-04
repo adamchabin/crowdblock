@@ -166,11 +166,16 @@ func runListGenerator(ctx context.Context, interval time.Duration) {
 // holds the lock for this round.
 func generateLists(ctx context.Context, instance string, interval time.Duration) (int, error) {
 	// Held for a bit less than a round, so that the next round can take it.
+	start := time.Now()
 	ok, err := rdb.SetNX(ctx, listLockKey, instance, interval-interval/10).Result()
 	if err != nil {
 		return 0, fmt.Errorf("redis lock: %w", err)
 	}
 	if !ok {
+		if debug {
+			holder, _ := rdb.Get(ctx, listLockKey).Result()
+			debugf("lists: round skipped, lock held by %s", holder)
+		}
 		return 0, nil
 	}
 
@@ -183,15 +188,18 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 	if err != nil {
 		return 0, fmt.Errorf("redis version: %w", err)
 	}
+	debugf("lists: round %d started (lock taken by %s, %d previous lists in Redis)", version, instance, len(prev))
 
 	lists := map[int]map[int]listPayload{}     // minutes -> min_reporters -> list
 	entries := map[int]map[int][]ipListEntry{} // the same, decoded
 	n := 0
 	for _, minutes := range allowedMinutes {
+		queryStart := time.Now()
 		all, err := queryIPList(ctx, minutes, 1)
 		if err != nil {
 			return 0, fmt.Errorf("query (minutes=%d): %w", minutes, err)
 		}
+		debugf("lists: round %d window %dm: %d addresses, query %s", version, minutes, len(all), time.Since(queryStart).Round(time.Microsecond))
 		if lists[minutes], err = buildLists(all); err != nil {
 			return 0, err
 		}
@@ -218,6 +226,16 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 					old, entries[minutes][min], known, interval); err != nil {
 					return err
 				}
+
+				if debug {
+					diff := "no previous list, no diff"
+					if known {
+						d := computeDiff(old, entries[minutes][min])
+						diff = fmt.Sprintf("diff +%d/-%d", len(d.Upsert), len(d.Remove))
+					}
+					debugf("lists: round %d list %d/%d: %d addresses, etag %s, %dB plain / %dB gzip, %s",
+						version, min, minutes, len(entries[minutes][min]), p.etag, len(p.plain), len(p.gz), diff)
+				}
 			}
 		}
 		return nil
@@ -225,6 +243,7 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 	if err != nil {
 		return 0, fmt.Errorf("redis write: %w", err)
 	}
+	debugf("lists: round %d done, %d lists in %s", version, n, time.Since(start).Round(time.Millisecond))
 	return n, nil
 }
 
@@ -261,6 +280,7 @@ func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 	// On a Redis error just fall back: the generator already logs it, once.
 	etag, err := rdb.Get(ctx, listKey(minReporters, minutes, "etag")).Result()
 	if err != nil {
+		debugf("list %d/%d: no etag in Redis (%v)", minReporters, minutes, err)
 		return false
 	}
 

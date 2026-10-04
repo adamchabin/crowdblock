@@ -38,6 +38,9 @@ var rdb *redis.Client
 
 func main() {
 	log.Printf("crowdblock server %s", version)
+	if debug {
+		log.Printf("DEBUG logging enabled")
+	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -335,6 +338,7 @@ func handleReportIP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("blacklist aggregation error for %s: %v", req.IP, err)
 	}
 
+	debugf("report %s source=%q by user %s (key %s)", req.IP, req.Source, userID, apiKeyID)
 	writeJSON(w, http.StatusCreated, map[string]any{"accepted": true, "blacklisted": blacklisted})
 }
 
@@ -348,6 +352,7 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 
 	if cached, cacheErr := rdb.Get(ctx, cacheKey).Result(); cacheErr == nil {
 		if id, uid, ok := strings.Cut(cached, "|"); ok {
+			debugf("api key %s: from cache", id)
 			return id, uid, nil
 		}
 	} else if cacheErr != redis.Nil {
@@ -358,8 +363,10 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 		`SELECT id, user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`, hash,
 	).Scan(&apiKeyID, &userID)
 	if err != nil {
+		debugf("api key %s…: invalid or revoked", rawKey[:min(len(rawKey), 8)])
 		return "", "", errors.New("key invalid or revoked")
 	}
+	debugf("api key %s: from database, cached for %s", apiKeyID, apiKeyCacheTTL)
 
 	if setErr := rdb.Set(ctx, cacheKey, apiKeyID+"|"+userID, apiKeyCacheTTL).Err(); setErr != nil {
 		log.Printf("redis SET error for %s: %v", cacheKey, setErr)
@@ -470,6 +477,7 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 	defer addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
 	defer addLogNote(r, "from", "db")
 
+	debugf("list %d/%d: not in Redis, computing from PostgreSQL", minReporters, minutes)
 	result, err := queryIPList(r.Context(), minutes, minReporters)
 	if err != nil {
 		log.Printf("list query failed: %v", err)

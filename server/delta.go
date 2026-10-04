@@ -222,16 +222,19 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 
 	start, err := rdb.ZScore(ctx, listKey(minReporters, minutes, "etags"), have).Result()
 	if err != nil {
+		debugf("delta %d/%d: client etag %s not in the history (%v), full list", minReporters, minutes, have, err)
 		return false // unknown or too old etag (or Redis error)
 	}
 	from := int64(start)
 
 	metaJSON, err := rdb.Get(ctx, listKey(minReporters, minutes, "meta")).Bytes()
 	if err != nil {
+		debugf("delta %d/%d: no meta in Redis (%v), full list", minReporters, minutes, err)
 		return false
 	}
 	var meta listMeta
 	if json.Unmarshal(metaJSON, &meta) != nil || from >= meta.Version || meta.Version-from > listHistory {
+		debugf("delta %d/%d: client at version %d, current %d: out of range, full list", minReporters, minutes, from, meta.Version)
 		return false
 	}
 
@@ -248,11 +251,16 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	if err != nil {
 		body, err = buildDelta(ctx, minReporters, minutes, from, current, meta, gzipped)
 		if err != nil {
+			debugf("delta %d/%d: %d -> %d failed: %v, full list", minReporters, minutes, from, meta.Version, err)
 			return false
 		}
 		_ = rdb.Set(ctx, cacheKey, body, 2*listRefreshInterval()).Err()
+		debugf("delta %d/%d: %d -> %d built and cached (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
+	} else {
+		debugf("delta %d/%d: %d -> %d from cache (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
 	}
 	if len(body) == 0 {
+		debugf("delta %d/%d: %d -> %d not worth it, full list", minReporters, minutes, from, meta.Version)
 		return false
 	}
 
@@ -291,12 +299,15 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 	for i, v := range vals {
 		s, ok := v.(string)
 		if !ok || json.Unmarshal([]byte(s), &diffs[i]) != nil {
+			debugf("delta %d/%d: diff of version %d missing", minReporters, minutes, from+1+int64(i))
 			return nil, nil // history incomplete
 		}
 	}
 
 	d := mergeDiffs(diffs)
 	if meta.Count > 0 && (len(d.Upsert)+len(d.Remove))*maxDeltaFraction > meta.Count {
+		debugf("delta %d/%d: %d changes for %d addresses, more than 1/%d", minReporters, minutes,
+			len(d.Upsert)+len(d.Remove), meta.Count, maxDeltaFraction)
 		return nil, nil
 	}
 
