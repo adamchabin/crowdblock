@@ -36,6 +36,7 @@ services:
       DATABASE_URL: postgres://postgres:password@postgres:5432/crowdblock?sslmode=disable
       REDIS_ADDR: redis:6379
       SEED_DEV_DATA: "1"   # test users and keys, sample reports (seed.sql)
+      DEBUG: "true"
     ports:
       - "8080:8080"
     depends_on:

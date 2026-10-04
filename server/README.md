@@ -56,6 +56,7 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 | `REDIS_ADDR` | `localhost:6379` | API key cache and report aggregation |
 | `LISTEN_ADDR` | `:8080` | |
 | `LIST_REFRESH` | `1m` | how often the IP lists are regenerated (Go duration) |
+| `DEBUG` | – | `true` also logs what happens behind the requests (lines prefixed `DEBUG`): list generation rounds (lock, query times, per list size / ETag / diff), why a delta falls back to the full list, delta cache hits, API key cache hits, accepted reports. ~25 lines per round, development only |
 | `GEOIP_DB` | `geoip/dbip-country-lite.mmdb` | relative to the working directory |
 | `SEED_DEV_DATA` | – | `1` loads `seed.sql`: test users and keys, sample reports – development only |
 
