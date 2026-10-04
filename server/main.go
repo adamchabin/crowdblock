@@ -103,12 +103,34 @@ func logRequests(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		body := &countingReader{ReadCloser: r.Body}
 		r.Body = body
+		notes := &logNotes{}
+		r = r.WithContext(context.WithValue(r.Context(), logNotesKey{}, notes))
 
 		next.ServeHTTP(sw, r)
 
-		log.Printf("%s %s %s %d in=%s out=%s %s", r.RemoteAddr, r.Method, r.URL.Path, sw.status,
-			formatBytes(body.n), formatBytes(sw.n), time.Since(start))
+		log.Printf("%s %s %s %d in=%s out=%s %s%s", r.RemoteAddr, r.Method, r.URL.Path, sw.status,
+			formatBytes(body.n), formatBytes(sw.n), time.Since(start), notes)
 	})
+}
+
+// logNotes are details a handler adds to its request's log line, e.g.
+// "list=full enc=gzip from=cache tier=1/1440".
+type logNotes struct{ parts []string }
+
+type logNotesKey struct{}
+
+func (n *logNotes) String() string {
+	if len(n.parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(n.parts, " ")
+}
+
+// addLogNote appends "key=value" to the log line of the request.
+func addLogNote(r *http.Request, key string, value any) {
+	if n, ok := r.Context().Value(logNotesKey{}).(*logNotes); ok {
+		n.parts = append(n.parts, fmt.Sprintf("%s=%v", key, value))
+	}
 }
 
 type statusWriter struct {
@@ -441,8 +463,12 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 	// Precomputed by the list generator (lists.go); computed here only until
 	// the first generation or when Redis is unavailable.
 	if serveCachedList(w, r, minReporters, minutes) {
+		addLogNote(r, "from", "cache")
+		addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
 		return
 	}
+	defer addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
+	defer addLogNote(r, "from", "db")
 
 	result, err := queryIPList(r.Context(), minutes, minReporters)
 	if err != nil {

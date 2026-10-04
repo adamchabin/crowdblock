@@ -42,3 +42,43 @@ func TestFormatBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestLogNotesForLists(t *testing.T) {
+	var out bytes.Buffer
+	log.SetOutput(&out)
+	defer log.SetOutput(io.Discard)
+
+	p, _ := newListPayload([]ipListEntry{{IP: "1.2.3.4", DistinctReporters: 3}})
+	h := logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeListPayload(w, r, p)
+		addLogNote(r, "from", "cache")
+		addLogNote(r, "tier", "1/1440")
+	}))
+
+	for _, tc := range []struct {
+		header, value, want string
+	}{
+		{"Accept-Encoding", "gzip", ` 200 in=0B out=\d+B \S+ list=full enc=gzip from=cache tier=1/1440$`},
+		{"", "", ` 200 in=0B out=44B \S+ list=full enc=plain from=cache tier=1/1440$`},
+		{"If-None-Match", p.etag, ` 304 in=0B out=0B \S+ list=not-modified from=cache tier=1/1440$`},
+	} {
+		out.Reset()
+		req := httptest.NewRequest("GET", "/api/v1/ips", nil)
+		if tc.header != "" {
+			req.Header.Set(tc.header, tc.value)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+
+		line := strings.TrimSpace(out.String())
+		if !regexp.MustCompile(tc.want).MatchString(line) {
+			t.Errorf("log %q does not match %q", line, tc.want)
+		}
+	}
+
+	// Requests without notes keep the plain format.
+	out.Reset()
+	logRequests(http.NotFoundHandler()).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+	if line := strings.TrimSpace(out.String()); !regexp.MustCompile(` 404 in=0B out=19B \S+$`).MatchString(line) {
+		t.Errorf("log without notes: %q", line)
+	}
+}

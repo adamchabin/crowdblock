@@ -246,13 +246,20 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 	// Clients may keep the list but must ask whether it changed.
 	h.Set("Cache-Control", "no-cache")
 
+	// Shown in the request log: full list, or the client's copy is current.
+	// ("diff" will come with delta sync.)
 	if r.Header.Get("If-None-Match") == etag {
+		addLogNote(r, "list", "not-modified")
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
+	addLogNote(r, "list", "full")
 	if gzipped {
+		addLogNote(r, "enc", "gzip")
 		h.Set("Content-Encoding", "gzip")
+	} else {
+		addLogNote(r, "enc", "plain")
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
