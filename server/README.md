@@ -30,8 +30,9 @@ Build locally from the repository root: `docker build -f server/Dockerfile -t cr
 ### Releasing
 
 `.github/workflows/server.yml` runs the tests and builds the image on every
-change of the server. Pushing a version tag publishes the image
-(`1.2.3`, `1.2`, `latest`) and creates a GitHub Release:
+change of the server. A push to `dev` publishes `dev-latest`. Pushing a
+version tag publishes the image (`1.2.3`, `1.2`, `latest`) and creates a
+GitHub Release:
 
 ```sh
 git tag v1.2.3 && git push origin v1.2.3
