@@ -78,7 +78,26 @@ Requests get the gzip version with `Accept-Encoding: gzip`, and `304 Not
 Modified` with `If-None-Match`. The ETag is the first 16 hex digits of the
 SHA-256 of the uncompressed body, quoted – clients may compute it themselves
 (the OpenWrt client does), so keep it that way. The list is a JSON array with
-one entry per line, so that small clients can parse it line by line. With several server instances only one
+one entry per line, so that small clients can parse it line by line.
+
+**Delta sync.** A client sending `If-None-Match` and `?delta=1` gets, instead
+of the full list, the changes since its copy (if that copy is one of the last
+60 generations and the changes are less than half the list):
+
+```
+{"etag":"\"…\"","count":5000,"set_hash":"0123456789abcdef","remove":["1.2.3.4"],"upsert":[
+{"ip":"5.6.7.8","distinct_reporters":3},
+…
+]}
+```
+
+`upsert` are new and changed entries, `remove` left the list, `etag` is the
+current list's ETag (send it next time). `count` and `set_hash` (first 16 hex
+digits of the SHA-256 of the sorted addresses, each followed by `\n`) describe
+the whole current set: a client that ends up with a different set must fetch
+the full list. Clients tell a delta (`{`) from a full list (`[`) by the first
+character. Details: `delta.go`. The request log shows `list=full`,
+`list=diff` or `list=not-modified`. With several server instances only one
 generates per round (lock `ips:lock`). Until the first round, or without
 Redis, the list is computed from PostgreSQL.
 

@@ -77,6 +77,12 @@ Authorization: Basic base64(crowdblock:api_key)
   quoted (`"97f8fef9892e2058"`). The client computes it from the saved list
   (`sha256sum`) and sends `If-None-Match`; on `304 Not Modified` it reuses
   `/tmp/crowdblock/list`, so an unchanged list costs no transfer.
+- Delta sync: with `If-None-Match` the client also sends `?delta=1` and may
+  get just the changes (`{"etag", "count", "set_hash", "remove", "upsert"}`,
+  see `server/README.md`). It rewrites the saved list line by line without the
+  removed / changed entries, appends the new ones, checks the count and the set
+  hash and, on a mismatch, fetches the full list right away (logged as
+  `delta rejected`). The log shows `sync ok (delta: N changed, M removed)`.
 - The list is sorted by `distinct_reporters`, descending – when `max_entries`
   is reached, the client keeps the most trusted entries.
 - `distinct_reporters` is the number of **distinct** reporters, not reports.

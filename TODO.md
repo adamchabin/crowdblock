@@ -47,13 +47,18 @@ running the OpenWrt client. Fine as a prototype; not ready at that scale.
       unpacking: 5 000 addresses ~8 MiB peak instead of ~17 MiB (and growing
       linearly – 20 000 would have been ~55–60 MiB, too much for 128 MiB
       routers); `/tmp` 580 KiB instead of 944 KiB.
-- [ ] Delta sync – see below. At scale `304` will be rare: the list changes
+- [x] Delta sync – see below. At scale `304` will be rare: the list changes
       with every generation (every minute) as reports keep coming, so a router
       syncing every 10 min almost always downloads the whole list, while the
       changes are a few percent of it (20 000 addresses at 170 req/s: ~240
       Mbit/s full vs a few Mbit/s of deltas).
 
-#### Delta sync design
+#### Delta sync design (implemented)
+
+Done as below, with the client's ETag (`If-None-Match` + `?delta=1`) instead
+of a version number – the client already has it and `uclient-fetch` can't
+read response headers. Server: `server/delta.go`; client:
+`openwrt/crowdblock/files/lib/api.uc`.
 
 - Each generation gets a version number. For every combination the server
   stores in Redis the diff to the previous generation (`added`, `removed`,

@@ -25,7 +25,8 @@ import (
 //	ips:<min_reporters>:<minutes>:etag
 //
 // Requests are then served without touching PostgreSQL. With several server
-// instances only the one holding ips:lock generates in a given round.
+// instances only the one holding ips:lock generates in a given round. Each
+// generation also stores what delta sync needs (see delta.go).
 
 const (
 	defaultListRefresh = time.Minute
@@ -173,7 +174,18 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 		return 0, nil
 	}
 
-	lists := map[int]map[int]listPayload{} // minutes -> min_reporters -> list
+	// The previous generation, for the diffs of delta sync (delta.go).
+	prev, err := previousLists(ctx)
+	if err != nil {
+		return 0, err
+	}
+	version, err := rdb.Incr(ctx, listVersionKey).Result()
+	if err != nil {
+		return 0, fmt.Errorf("redis version: %w", err)
+	}
+
+	lists := map[int]map[int]listPayload{}     // minutes -> min_reporters -> list
+	entries := map[int]map[int][]ipListEntry{} // the same, decoded
 	n := 0
 	for _, minutes := range allowedMinutes {
 		all, err := queryIPList(ctx, minutes, 1)
@@ -183,11 +195,16 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 		if lists[minutes], err = buildLists(all); err != nil {
 			return 0, err
 		}
+		entries[minutes] = map[int][]ipListEntry{}
+		for _, min := range allowedMinReporters {
+			entries[minutes][min] = atLeast(all, min)
+		}
 		n += len(lists[minutes])
 	}
 
 	// One transaction: a client never gets the gzip and plain versions (or
-	// the ETag) of different generations. Expire if the generator stops.
+	// the ETag, or a diff) of different generations. Expire if the generator
+	// stops.
 	ttl := 5 * interval
 	_, err = rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		for minutes, window := range lists {
@@ -195,6 +212,12 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 				pipe.Set(ctx, listKey(min, minutes, "json"), p.plain, ttl)
 				pipe.Set(ctx, listKey(min, minutes, "gz"), p.gz, ttl)
 				pipe.Set(ctx, listKey(min, minutes, "etag"), p.etag, ttl)
+
+				old, known := prev[listKey(min, minutes, "json")]
+				if err := storeDeltaData(ctx, pipe, min, minutes, version, p.etag,
+					old, entries[minutes][min], known, interval); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -205,26 +228,64 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 	return n, nil
 }
 
+// previousLists returns the lists of the previous generation still in Redis,
+// decoded, keyed by their json key.
+func previousLists(ctx context.Context) (map[string][]ipListEntry, error) {
+	var keys []string
+	for _, minutes := range allowedMinutes {
+		for _, min := range allowedMinReporters {
+			keys = append(keys, listKey(min, minutes, "json"))
+		}
+	}
+
+	vals, err := rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis read: %w", err)
+	}
+
+	prev := map[string][]ipListEntry{}
+	for i, v := range vals {
+		var list []ipListEntry
+		if s, ok := v.(string); ok && json.Unmarshal([]byte(s), &list) == nil {
+			prev[keys[i]] = list
+		}
+	}
+	return prev, nil
+}
+
 // serveCachedList writes the precomputed list and returns true, or returns
 // false (nothing written) when it is not in Redis.
 func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minutes int) bool {
-	kind := "json"
-	if acceptsGzip(r) {
-		kind = "gz"
-	}
+	ctx := r.Context()
 
 	// On a Redis error just fall back: the generator already logs it, once.
-	vals, err := rdb.MGet(r.Context(), listKey(minReporters, minutes, "etag"), listKey(minReporters, minutes, kind)).Result()
+	etag, err := rdb.Get(ctx, listKey(minReporters, minutes, "etag")).Result()
 	if err != nil {
 		return false
 	}
-	etag, ok1 := vals[0].(string)
-	body, ok2 := vals[1].(string)
-	if !ok1 || !ok2 {
+
+	have := r.Header.Get("If-None-Match")
+	if have == etag {
+		writeList(w, r, etag, nil, false) // 304
+		return true
+	}
+
+	// Delta sync only for clients asking for it: others couldn't parse it.
+	if have != "" && r.URL.Query().Get("delta") == "1" && serveDelta(w, r, minReporters, minutes, have, etag) {
+		return true
+	}
+
+	gzipped := acceptsGzip(r)
+	kind := "json"
+	if gzipped {
+		kind = "gz"
+	}
+	body, err := rdb.Get(ctx, listKey(minReporters, minutes, kind)).Bytes()
+	if err != nil {
 		return false
 	}
 
-	writeList(w, r, etag, []byte(body), kind == "gz")
+	writeList(w, r, etag, body, gzipped)
 	return true
 }
 

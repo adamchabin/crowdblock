@@ -243,8 +243,13 @@ function sync(cfg, st) {
 		return false;
 	}
 
+	let how = res.not_modified ? ' (list not modified)'
+		: res.delta ? sprintf(' (delta: %d changed, %d removed)', res.delta.upserted, res.delta.removed)
+		: res.delta_failed ? sprintf(' (full list, delta rejected: %s)', res.delta_failed)
+		: '';
+
 	log('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
-		res.not_modified ? ' (list not modified)' : '',
+		how,
 		length(keys(st.entries)), stats.added, stats.refreshed,
 		stats.whitelisted, purged, stats.invalid,
 		stats.full ? sprintf(', %d dropped: max_entries reached', stats.full) : '');
