@@ -1,6 +1,10 @@
 {
 	"%d IPv4, %d IPv6, %d paused": "%d IPv4, %d IPv6, %d pausiert",
 	"%d of %d addresses": "%d von %d Adressen",
+	"1 hour": "1 Stunde",
+	"24 hours": "24 Stunden",
+	"6 hours": "6 Stunden",
+	"7 days": "7 Tage",
 	"Addresses and networks that are never blocked. Private ranges and the router's own addresses are whitelisted automatically.": "Adressen und Netze, die nie gesperrt werden. Private Bereiche und die eigenen Adressen des Routers werden automatisch hinzugefügt.",
 	"Addresses downloaded from the server in the last sync. The list refreshes automatically.": "Bei der letzten Synchronisierung vom Server geladene Adressen. Die Liste wird automatisch aktualisiert.",
 	"Advanced Settings": "Erweiterte Einstellungen",

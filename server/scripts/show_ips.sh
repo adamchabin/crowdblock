@@ -3,6 +3,7 @@
 # Reuses (or creates) a dedicated bot user/API key under the hood, cached locally
 # so repeated runs don't burn through the per-user API key limit.
 # Usage: ./show_ips.sh [min_reporters] [minutes]
+#   min_reporters: 1, 5, 10, 20 or 50; minutes: 60, 360, 1440 or 10080
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"

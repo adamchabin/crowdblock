@@ -65,7 +65,7 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 | `POST /api/v1/register` | – | `{"email", "password"}` → user |
 | `POST /api/v1/api-keys` | Basic (email, password) | `{"name"}` → `{"api_key": "sfw_..."}`, shown once |
 | `POST /api/v1/reports` | API key | `{"ip", "source"}` – source optional, e.g. `auth` |
-| `GET /api/v1/ips?min_reporters=N&minutes=M` | API key | addresses reported by ≥ N distinct users in the last M minutes |
+| `GET /api/v1/ips?min_reporters=N&minutes=M` | API key | addresses reported by ≥ N distinct users in the last M minutes; N: 1, 5, 10, 20, 50; M: 60, 360, 1440, 10080 (1 h, 6 h, 24 h, 7 days) |
 
 The API key goes in the `X-API-Key` header or as the Basic auth password.
 `GET /api/v1/ips` is gzip-compressed for clients sending `Accept-Encoding: gzip`.

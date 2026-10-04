@@ -49,7 +49,7 @@ files/lib/nft.uc                 `inet crowdblock` table, atomic set replacement
 ## API contract
 
 ```
-GET /api/v1/ips?min_reporters=5&minutes=60
+GET /api/v1/ips?min_reporters=5&minutes=360
 Authorization: Basic base64(crowdblock:api_key)
 
 200 OK
@@ -59,7 +59,10 @@ Authorization: Basic base64(crowdblock:api_key)
 ]
 ```
 
-- `minutes` comes from the `report_window` option (rounded up to minutes).
+- The server serves fixed thresholds only, so that every list can be
+  precomputed: `min_reporters` 1, 5, 10, 20 or 50 (option `min_reports`) and
+  `minutes` 60, 360, 1440 or 10080 (option `report_window`: 1h, 6h, 24h, 7d).
+  Other values are rejected with `400`; the daemon refuses them at start.
 - `country` (ISO 3166-1 alpha-2) is optional – the server adds it when it has
   a GeoIP database (`server/scripts/update_geoip.sh`, DB-IP Lite, CC BY 4.0).
 - `sources` is optional – what detected the attacks in the report window

@@ -39,6 +39,10 @@ function bool_opt(v, def) {
 	return (v in [ '1', 'yes', 'on', 'true', 'enabled' ]);
 }
 
+// The server serves the list for these values only (GET /api/v1/ips).
+const MIN_REPORTS = [ 1, 5, 10, 20, 50 ];
+const REPORT_WINDOWS = [ 3600, 21600, 86400, 604800 ];  // 1h, 6h, 24h, 7d
+
 // Returns { cfg: {...} } or { error: '...' }.
 function load() {
 	let s = cursor().get_all('crowdblock', 'main');
@@ -51,7 +55,7 @@ function load() {
 		server:        rtrim(s.server ?? '', '/'),
 		api_key:       s.api_key ?? '',
 		min_reports:   int_opt(s.min_reports, 5, 1, 1000000),
-		report_window: dur_opt(s.report_window, 3600, 60, 30 * 86400),
+		report_window: dur_opt(s.report_window, 21600, 60, 30 * 86400),
 		block_time:    dur_opt(s.block_time, 86400, 60, 30 * 86400),
 		sync_interval: dur_opt(s.sync_interval, 600, 60, 86400),
 		max_entries:   int_opt(s.max_entries, 20000, 1, 500000),
@@ -70,6 +74,12 @@ function load() {
 	for (let k in [ 'min_reports', 'report_window', 'block_time', 'sync_interval', 'max_entries', 'timeout' ])
 		if (cfg[k] == null)
 			return { error: `invalid value for option ${k}` };
+
+	if (!(cfg.min_reports in MIN_REPORTS))
+		return { error: `option min_reports must be one of ${join(', ', MIN_REPORTS)}` };
+
+	if (!(cfg.report_window in REPORT_WINDOWS))
+		return { error: 'option report_window must be one of 1h, 6h, 24h, 7d' };
 
 	// A block must outlive the next sync (with room for one failed sync),
 	// otherwise listed addresses are unblocked between syncs.

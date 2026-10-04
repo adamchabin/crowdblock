@@ -78,15 +78,20 @@ return view.extend({
 		for (const code in i18n.languages)
 			o.value(code, i18n.languages[code]);
 
-		o = s.taboption('general', form.Value, 'min_reports', _('Minimum reports'),
+		// Fixed thresholds served by the server (same lists as in config.uc).
+		o = s.taboption('general', form.ListValue, 'min_reports', _('Minimum reports'),
 			_('How many distinct users must report an address before it is blocked.'));
-		o.datatype = 'range(1,1000000)';
-		o.placeholder = '5';
+		for (const n of [ 1, 5, 10, 20, 50 ])
+			o.value(String(n));
+		o.default = '5';
 
-		o = s.taboption('advanced', form.Value, 'report_window', _('Report window'),
+		o = s.taboption('advanced', form.ListValue, 'report_window', _('Report window'),
 			_('Only reports from this recent period are counted.'));
-		o.placeholder = '1h';
-		o.validate = duration_validator(60, 30 * 86400, '1m', '30d', 3600);
+		o.value('1h', _('1 hour'));
+		o.value('6h', _('6 hours'));
+		o.value('24h', _('24 hours'));
+		o.value('7d', _('7 days'));
+		o.default = '6h';
 
 		// Same rule as in config.uc: a block must outlive the next sync (with
 		// room for one failed sync). Checked on both options, as LuCI only

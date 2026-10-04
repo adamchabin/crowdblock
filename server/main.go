@@ -12,8 +12,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -393,8 +395,28 @@ type ipListEntry struct {
 	Sources           []string `json:"sources,omitempty"` // e.g. ["auth", "fail2ban"], from the report window
 }
 
+// The list is served for fixed thresholds only, so that the server can
+// precompute and cache every combination (5 × 4 lists).
+var (
+	allowedMinReporters = []int{1, 5, 10, 20, 50}
+	allowedMinutes      = []int{60, 360, 1440, 10080} // 1 h, 6 h, 24 h, 7 days
+)
+
+// parseListParams validates min_reporters and minutes of GET /api/v1/ips.
+func parseListParams(q url.Values) (minReporters, minutes int, err error) {
+	minReporters, err = strconv.Atoi(q.Get("min_reporters"))
+	if err != nil || !slices.Contains(allowedMinReporters, minReporters) {
+		return 0, 0, fmt.Errorf("invalid data (min_reporters must be one of %v)", allowedMinReporters)
+	}
+	minutes, err = strconv.Atoi(q.Get("minutes"))
+	if err != nil || !slices.Contains(allowedMinutes, minutes) {
+		return 0, 0, fmt.Errorf("invalid data (minutes must be one of %v)", allowedMinutes)
+	}
+	return minReporters, minutes, nil
+}
+
 // handleListIPs returns IPs reported by at least min_reporters distinct users
-// within the last `minutes` minutes, e.g. GET /api/v1/ips?min_reporters=2&minutes=10.
+// within the last `minutes` minutes, e.g. GET /api/v1/ips?min_reporters=5&minutes=360.
 func handleListIPs(w http.ResponseWriter, r *http.Request) {
 	rawKey := apiKeyFromRequest(r)
 	if rawKey == "" {
@@ -409,14 +431,9 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	minReporters, err := strconv.Atoi(r.URL.Query().Get("min_reporters"))
-	if err != nil || minReporters < 1 {
-		http.Error(w, "invalid data (min_reporters must be a positive integer)", http.StatusBadRequest)
-		return
-	}
-	minutes, err := strconv.Atoi(r.URL.Query().Get("minutes"))
-	if err != nil || minutes < 1 {
-		http.Error(w, "invalid data (minutes must be a positive integer)", http.StatusBadRequest)
+	minReporters, minutes, err := parseListParams(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

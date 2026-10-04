@@ -32,8 +32,9 @@ running the OpenWrt client. Fine as a prototype; not ready at that scale.
 - [ ] Each of the ~170 req/s aggregates all reports in the window (~1 M rows
       per hour). The `(ip, reported_at)` index doesn't help a filter on time
       alone.
-- [ ] Every router sends its own `min_reporters` / `minutes`, so responses
-      can't be cached.
+- [x] Every router sent its own `min_reporters` / `minutes`, so responses
+      couldn't be cached. Now fixed tiers: `min_reporters` 1/5/10/20/50,
+      `minutes` 60/360/1440/10080 – 20 lists to precompute.
 - [ ] Compute the list in the background every 30–60 s for a few fixed
       thresholds, keep it in memory already gzipped, serve it with `ETag`
       (`304` = no transfer). Later: delta sync (changes since the last sync).

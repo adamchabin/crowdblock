@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Lists IPs reported by at least <min_reporters> distinct users within the last <minutes> minutes.
 # Usage: ./list_ips.sh <api_key> <min_reporters> <minutes>
+#   min_reporters: 1, 5, 10, 20 or 50; minutes: 60, 360, 1440 or 10080
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8080}"
