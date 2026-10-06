@@ -24,8 +24,8 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix) WHERE rev
 CREATE TABLE IF NOT EXISTS ip_reports (
     id          BIGSERIAL PRIMARY KEY,
     ip          INET NOT NULL,
-    api_key_id  UUID NOT NULL REFERENCES api_keys(id),
-    user_id     UUID NOT NULL REFERENCES users(id),
+    api_key_id  UUID NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     reported_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -35,6 +35,22 @@ CREATE INDEX IF NOT EXISTS idx_ip_reports_ip_time ON ip_reports(ip, reported_at)
 -- what detected the attack, e.g. 'auth' or 'fail2ban' (reporter plugin name);
 -- NULL for reports sent without it
 ALTER TABLE ip_reports ADD COLUMN IF NOT EXISTS source TEXT;
+
+-- Existing databases: make deleting a user (or key) cascade to its reports.
+-- Only touches constraints that are not yet ON DELETE CASCADE.
+DO $$
+DECLARE c record;
+BEGIN
+    FOR c IN
+        SELECT conname, confrelid::regclass AS ref, a.attname
+        FROM pg_constraint k
+        JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
+        WHERE k.conrelid = 'ip_reports'::regclass AND k.contype = 'f' AND k.confdeltype <> 'c'
+    LOOP
+        EXECUTE format('ALTER TABLE ip_reports DROP CONSTRAINT %I, ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %s(id) ON DELETE CASCADE',
+                       c.conname, c.conname, c.attname, c.ref);
+    END LOOP;
+END $$;
 
 CREATE TABLE IF NOT EXISTS blacklist (
     ip                 INET PRIMARY KEY,
