@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
@@ -89,6 +90,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/register", handleRegister)
 	mux.HandleFunc("POST /api/v1/api-keys", handleCreateAPIKey)
+	mux.HandleFunc("GET /api/v1/api-keys", handleListAPIKeys)
+	mux.HandleFunc("DELETE /api/v1/api-keys/{id}", handleRevokeAPIKey)
+	mux.HandleFunc("DELETE /api/v1/account", handleDeleteAccount)
 	mux.HandleFunc("POST /api/v1/reports", handleReportIP)
 	mux.HandleFunc("GET /api/v1/ips", handleListIPs)
 
@@ -229,19 +233,8 @@ type createKeyRequest struct {
 }
 
 func handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
-	email, password, ok := r.BasicAuth()
+	userID, ok := authenticateUser(w, r)
 	if !ok {
-		w.Header().Set("WWW-Authenticate", `Basic realm="api"`)
-		http.Error(w, "authorization required", http.StatusUnauthorized)
-		return
-	}
-
-	var userID, passwordHash string
-	err := db.QueryRow(r.Context(),
-		`SELECT id, password_hash FROM users WHERE email = $1`, email,
-	).Scan(&userID, &passwordHash)
-	if err != nil || bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) != nil {
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
@@ -273,10 +266,11 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := tx.Exec(r.Context(),
-		`INSERT INTO api_keys (user_id, key_prefix, key_hash, name) VALUES ($1, $2, $3, $4)`,
+	var keyID string
+	if err := tx.QueryRow(r.Context(),
+		`INSERT INTO api_keys (user_id, key_prefix, key_hash, name) VALUES ($1, $2, $3, $4) RETURNING id`,
 		userID, keyPrefix, keyHash, req.Name,
-	); err != nil {
+	).Scan(&keyID); err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -287,7 +281,135 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// full key is shown only once, at creation time
-	writeJSON(w, http.StatusCreated, map[string]string{"api_key": rawKey})
+	writeJSON(w, http.StatusCreated, map[string]string{"id": keyID, "api_key": rawKey})
+}
+
+// dummyHash makes the login of a nonexistent user cost as much as a real
+// one, so response time doesn't reveal which e-mails are registered.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy"), bcrypt.DefaultCost)
+
+// authenticateUser checks Basic Auth (email/password) and returns the user's
+// id. On failure it writes the 401 response and returns ok=false.
+func authenticateUser(w http.ResponseWriter, r *http.Request) (userID string, ok bool) {
+	email, password, hasAuth := r.BasicAuth()
+	if !hasAuth {
+		w.Header().Set("WWW-Authenticate", `Basic realm="api"`)
+		http.Error(w, "authorization required", http.StatusUnauthorized)
+		return "", false
+	}
+
+	passwordHash := string(dummyHash)
+	err := db.QueryRow(r.Context(),
+		`SELECT id, password_hash FROM users WHERE email = $1`, email,
+	).Scan(&userID, &passwordHash)
+	if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) != nil || err != nil {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		return "", false
+	}
+	return userID, true
+}
+
+// forgetAPIKeys drops the cached authentication of keys (by key_hash), so
+// a revoked key stops working at once, not after apiKeyCacheTTL.
+func forgetAPIKeys(ctx context.Context, hashes ...string) {
+	keys := make([]string, len(hashes))
+	for i, h := range hashes {
+		keys[i] = "apikey:" + h
+	}
+	if len(keys) == 0 {
+		return
+	}
+	if err := rdb.Del(ctx, keys...).Err(); err != nil {
+		log.Printf("redis DEL error for %d api keys: %v", len(keys), err)
+	}
+}
+
+// GET /api/v1/api-keys lists the user's active keys (ids, never the keys).
+func handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authenticateUser(w, r)
+	if !ok {
+		return
+	}
+	rows, err := db.Query(r.Context(),
+		`SELECT id, key_prefix, COALESCE(name, ''), created_at FROM api_keys
+		 WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at`, userID)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type keyInfo struct {
+		ID        string    `json:"id"`
+		Prefix    string    `json:"prefix"`
+		Name      string    `json:"name"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	keys := []keyInfo{}
+	for rows.Next() {
+		var k keyInfo
+		if err := rows.Scan(&k.ID, &k.Prefix, &k.Name, &k.CreatedAt); err != nil {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		keys = append(keys, k)
+	}
+	if rows.Err() != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, keys)
+}
+
+// DELETE /api/v1/api-keys/{id} revokes one of the user's keys.
+func handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authenticateUser(w, r)
+	if !ok {
+		return
+	}
+
+	var keyHash string
+	err := db.QueryRow(r.Context(),
+		`UPDATE api_keys SET revoked_at = now()
+		 WHERE id::text = $1 AND user_id = $2 AND revoked_at IS NULL RETURNING key_hash`,
+		r.PathValue("id"), userID,
+	).Scan(&keyHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "no such active key", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	forgetAPIKeys(r.Context(), keyHash)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DELETE /api/v1/account deletes the user with all keys and reports
+// (ON DELETE CASCADE). Reports are gone from the lists at the next refresh;
+// entries already in the blacklist table stay.
+func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authenticateUser(w, r)
+	if !ok {
+		return
+	}
+
+	var hashes []string
+	if err := db.QueryRow(r.Context(),
+		`SELECT COALESCE(array_agg(key_hash), '{}') FROM api_keys WHERE user_id = $1`, userID,
+	).Scan(&hashes); err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	if _, err := db.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	forgetAPIKeys(r.Context(), hashes...)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func generateAPIKey() (raw, hash, prefix string, err error) {
