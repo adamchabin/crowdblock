@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"testing"
 )
@@ -26,6 +27,18 @@ func TestParseListParams(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("parseListParams(%q) = %q, want %q", query, got, want)
+		}
+	}
+}
+
+func TestIsPublicIP(t *testing.T) {
+	for ip, want := range map[string]bool{
+		"203.0.113.10": true, "8.8.8.8": true, "2001:4860:4860::8888": true,
+		"10.0.0.1": false, "192.168.1.1": false, "127.0.0.1": false, "0.0.0.0": false,
+		"169.254.1.1": false, "224.0.0.1": false, "::1": false, "fe80::1": false, "fd00::1": false,
+	} {
+		if got := isPublicIP(netip.MustParseAddr(ip)); got != want {
+			t.Errorf("isPublicIP(%s) = %v, want %v", ip, got, want)
 		}
 	}
 }

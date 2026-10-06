@@ -8,9 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -18,16 +22,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
-	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	maxAPIKeysPerUser = 10
-	blacklistWindow   = time.Hour
+	maxAPIKeysPerUser  = 10
+	blacklistWindow    = time.Hour
 	blacklistThreshold = 5
-	apiKeyCacheTTL    = 60 * time.Second
+	apiKeyCacheTTL     = 60 * time.Second
+	maxBodyBytes       = 4 << 10 // all request bodies are tiny JSON objects
 )
 
 // Set at build time: go build -ldflags "-X main.version=v1.2.3"
@@ -95,7 +97,15 @@ func main() {
 		addr = ":8080"
 	}
 	log.Printf("server listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, logRequests(mux)))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           logRequests(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 // logRequests logs every incoming HTTP request to the console: method, path,
@@ -104,7 +114,7 @@ func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		body := &countingReader{ReadCloser: r.Body}
+		body := &countingReader{ReadCloser: http.MaxBytesReader(w, r.Body, maxBodyBytes)}
 		r.Body = body
 		notes := &logNotes{}
 		r = r.WithContext(context.WithValue(r.Context(), logNotesKey{}, notes))
@@ -320,6 +330,12 @@ func handleReportIP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid data (ip field required)", http.StatusBadRequest)
 		return
 	}
+	addr, err := netip.ParseAddr(req.IP)
+	if err != nil || !isPublicIP(addr) {
+		http.Error(w, "invalid data (ip must be a public IPv4/IPv6 address)", http.StatusBadRequest)
+		return
+	}
+	req.IP = addr.Unmap().String()
 	if req.Source != "" && !sourcePattern.MatchString(req.Source) {
 		http.Error(w, "invalid data (source: up to 32 characters a-z, 0-9, _ and -)", http.StatusBadRequest)
 		return
@@ -340,6 +356,13 @@ func handleReportIP(w http.ResponseWriter, r *http.Request) {
 
 	debugf("report %s source=%q by user %s (key %s)", req.IP, req.Source, userID, apiKeyID)
 	writeJSON(w, http.StatusCreated, map[string]any{"accepted": true, "blacklisted": blacklisted})
+}
+
+// isPublicIP rejects addresses that must never reach a blocklist: private,
+// loopback, link-local, multicast, unspecified. (CIDR input fails ParseAddr.)
+func isPublicIP(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsValid() && a.Zone() == "" && a.IsGlobalUnicast() && !a.IsPrivate()
 }
 
 // authenticateAPIKey resolves a raw API key to its (apiKeyID, userID) pair.
