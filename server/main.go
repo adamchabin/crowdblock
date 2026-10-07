@@ -403,11 +403,32 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
+
+	// The user must also stop counting towards the blacklist threshold:
+	// drop it from the reporter sets of the IPs it reported in the window.
+	var ips []string
+	if rows, err := db.Query(r.Context(),
+		`SELECT DISTINCT host(ip) FROM ip_reports
+		 WHERE user_id = $1 AND reported_at > now() - $2::int * interval '1 second'`,
+		userID, int(blacklistWindow.Seconds())); err == nil {
+		ips, _ = pgx.CollectRows(rows, pgx.RowTo[string])
+	}
+
 	if _, err := db.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, userID); err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
 
+	if len(ips) > 0 {
+		if _, err := rdb.Pipelined(r.Context(), func(p redis.Pipeliner) error {
+			for _, ip := range ips {
+				p.ZRem(r.Context(), reportersKey(ip), userID)
+			}
+			return nil
+		}); err != nil {
+			log.Printf("redis ZREM for deleted user %s: %v", userID, err)
+		}
+	}
 	forgetAPIKeys(r.Context(), hashes...)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -520,6 +541,9 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 	return
 }
 
+// reportersKey is the Redis sorted set of recent reporters of one IP.
+func reportersKey(ip string) string { return "ip:reports:" + ip }
+
 // maybeBlacklist records the report in a Redis sorted set (member = user_id,
 // score = report time) keyed per IP, trims entries older than blacklistWindow,
 // and counts the remainder to get the number of distinct recent reporters —
@@ -527,7 +551,7 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 // run against postgres on every single call. If the threshold is reached, the
 // (rare) blacklist upsert still goes to postgres for durable storage.
 func maybeBlacklist(ctx context.Context, ip, userID string) (bool, error) {
-	key := "ip:reports:" + ip
+	key := reportersKey(ip)
 	now := time.Now()
 	cutoff := now.Add(-blacklistWindow)
 
