@@ -37,11 +37,14 @@ services:
       REDIS_ADDR: redis:6379
       SEED_DEV_DATA: "1"   # test users and keys, sample reports (seed.sql)
       DEBUG: "false"
-      # Registration by e-mail (the Register button) needs an SMTP server:
-      # SMTP_FROM: crowdblock@example.com
-      # SMTP_HOST: smtp.example.com:587
-      # SMTP_USERNAME: ...
-      # SMTP_PASSWORD: ...
+      # Registration by e-mail (the Register button) needs all four. Taken from
+      # the shell or from a .env file next to this file (not committed):
+      #   SMTP_FROM=crowdblock@example.com  SMTP_HOST=smtp.example.com:587
+      #   SMTP_USERNAME=...                 SMTP_PASSWORD=...
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     ports:
       - "8080:8080"
     depends_on:
