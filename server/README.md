@@ -65,6 +65,7 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 | Endpoint | Auth | |
 |---|---|---|
 | `POST /api/v1/register` | – | `{"email", "password"}` → user |
+| `GET /api/v1/stats` | none | aggregates only (counts, reports per hour, sources, top countries), cached for 60 s |
 | `POST /api/v1/api-keys` | Basic (email, password) | `{"name"}` → `{"id", "api_key": "sfw_..."}`, the key is shown once |
 | `GET /api/v1/api-keys` | Basic | active keys: `[{"id", "prefix", "name", "created_at"}]` |
 | `DELETE /api/v1/api-keys/{id}` | Basic | revokes the key at once (204) |
@@ -107,3 +108,7 @@ Redis, the list is computed from PostgreSQL.
 
 `scripts/` has curl helpers for all endpoints (`create_user.sh`,
 `create_api_key.sh`, `report_ips.sh`, `list_ips.sh`, `show_ips.sh`).
+
+## Web UI
+
+`GET /` serves a single static page (embedded `ui.html`, no build step, no external requests) with statistics from `GET /api/v1/stats`. It is public and shows aggregates only – no addresses and no user data. If the server is exposed to the internet and you don't want that, restrict `/` and `/api/v1/stats` in the reverse proxy.

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crowdblock</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --fg:#1a1d21; --mute:#6b7280; --bar:#3b82f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1b1f25; --fg:#e6e8eb; --mute:#8b93a0; --bar:#60a5fa; } }
+  body { margin:0; font:15px system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:960px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:20px; margin:0 0 4px; } .mute { color:var(--mute); font-size:13px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin:20px 0; }
+  .card { background:var(--card); border-radius:10px; padding:14px 16px; }
+  .card b { display:block; font-size:26px; margin-top:4px; }
+  h2 { font-size:14px; margin:0 0 10px; color:var(--mute); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .row { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); }
+  .chart { display:flex; align-items:flex-end; gap:3px; height:120px; }
+  .chart i { flex:1; background:var(--bar); border-radius:2px 2px 0 0; min-height:1px; }
+  .axis { display:flex; justify-content:space-between; margin-top:4px; }
+  .bar { display:grid; grid-template-columns:80px 1fr 56px; gap:8px; align-items:center; margin:5px 0; }
+  .bar span:nth-child(3) { text-align:right; font-variant-numeric:tabular-nums; }
+  .bar div { background:var(--bar); height:10px; border-radius:3px; }
+  #err { color:#dc2626; }
+</style>
+</head>
+<body>
+<main>
+  <h1>crowdblock</h1>
+  <div class="mute">Crowd-sourced blocklist &middot; <span id="when">loading…</span> <span id="err"></span></div>
+  <div class="grid" id="cards"></div>
+  <div class="card"><h2>Reports per hour, last 24 h</h2><div class="chart" id="hourly"></div>
+    <div class="axis mute"><span>24 h ago</span><span>now</span></div></div>
+  <div class="row" style="margin-top:12px">
+    <div class="card"><h2>Top countries (reported IPs, 24 h)</h2><div id="countries"></div></div>
+    <div class="card"><h2>Reports by source (24 h)</h2><div id="sources"></div></div>
+  </div>
+</main>
+<script>
+// textContent only: no value from the API is ever parsed as HTML.
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
+const fmt = (n) => n.toLocaleString();
+
+function bars(box, rows) {
+  box.replaceChildren();
+  const max = Math.max(1, ...rows.map((r) => r[1]));
+  if (!rows.length) box.append(el('div', 'no data yet', 'mute'));
+  for (const [name, n] of rows) {
+    const bar = el('div', undefined, 'bar'), fill = el('div');
+    fill.style.width = (100 * n / max) + '%';
+    const track = el('span'); track.append(fill);
+    bar.append(el('span', name), track, el('span', fmt(n)));
+    box.append(bar);
+  }
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/v1/stats');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const s = await r.json();
+    $('err').textContent = '';
+    $('when').textContent = 'updated ' + new Date(s.generated_at).toLocaleTimeString();
+
+    $('cards').replaceChildren(...[
+      ['Reports, 24 h', s.reports_24h], ['Reports, 7 d', s.reports_7d],
+      ['Unique IPs, 24 h', s.unique_ips_24h], ['Blacklisted, 24 h', s.blacklisted_24h],
+      ['Contributors', s.users], ['Active API keys', s.active_keys],
+    ].map(([label, n]) => { const c = el('div', undefined, 'card'); c.append(el('span', label, 'mute'), el('b', fmt(n))); return c; }));
+
+    const max = Math.max(1, ...s.hourly);
+    $('hourly').replaceChildren(...s.hourly.map((n, i) => {
+      const b = el('i'); b.style.height = (100 * n / max) + '%'; b.title = `${24 - i - 1} h ago: ${fmt(n)}`; return b;
+    }));
+    bars($('countries'), s.countries.map((c) => [c.country, c.ips]));
+    bars($('sources'), Object.entries(s.sources).sort((a, b) => b[1] - a[1]));
+  } catch (e) {
+    $('err').textContent = ' · cannot load stats: ' + e.message;
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

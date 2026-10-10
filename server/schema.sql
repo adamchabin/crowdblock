@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS ip_reports (
 -- fast counting of reports for a given IP within a time window
 CREATE INDEX IF NOT EXISTS idx_ip_reports_ip_time ON ip_reports(ip, reported_at);
 
+-- statistics (UI) count reports by time alone
+CREATE INDEX IF NOT EXISTS idx_ip_reports_time ON ip_reports(reported_at);
+
 -- what detected the attack, e.g. 'auth' or 'fail2ban' (reporter plugin name);
 -- NULL for reports sent without it
 ALTER TABLE ip_reports ADD COLUMN IF NOT EXISTS source TEXT;

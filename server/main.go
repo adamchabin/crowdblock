@@ -88,6 +88,8 @@ func main() {
 	go runListGenerator(ctx, listRefreshInterval())
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", handleUI)
+	mux.HandleFunc("GET /api/v1/stats", handleStats)
 	mux.HandleFunc("POST /api/v1/register", handleRegister)
 	mux.HandleFunc("POST /api/v1/api-keys", handleCreateAPIKey)
 	mux.HandleFunc("GET /api/v1/api-keys", handleListAPIKeys)
