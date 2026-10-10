@@ -622,6 +622,7 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 
 	if cached, cacheErr := rdb.Get(ctx, cacheKey).Result(); cacheErr == nil {
 		if id, uid, ok := strings.Cut(cached, "|"); ok {
+			keyHits.Add(1)
 			debugf("api key %s: from cache", id)
 			return id, uid, nil
 		}
@@ -629,6 +630,7 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 		log.Printf("redis GET error for %s: %v", cacheKey, cacheErr)
 	}
 
+	keyMisses.Add(1)
 	err = db.QueryRow(ctx,
 		`SELECT id, user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`, hash,
 	).Scan(&apiKeyID, &userID)

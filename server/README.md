@@ -71,7 +71,7 @@ Registration by e-mail (the **Register** button, `POST /api/v1/register` with ju
 | Endpoint | Auth | |
 |---|---|---|
 | `POST /api/v1/register` | – | `{"email", "password"}` → user |
-| `GET /api/v1/stats` | none | aggregates only (counts, reports per hour, sources, top countries), cached for 60 s |
+| `GET /api/v1/stats` | none | aggregates only (counts, reports per hour, sources, top countries, cache statistics), cached for 60 s |
 | `POST /api/v1/api-keys` | Basic (email, password) | `{"name"}` → `{"id", "api_key": "sfw_..."}`, the key is shown once |
 | `GET /api/v1/api-keys` | Basic | active keys: `[{"id", "prefix", "name", "created_at"}]` |
 | `DELETE /api/v1/api-keys/{id}` | Basic | revokes the key at once (204) |

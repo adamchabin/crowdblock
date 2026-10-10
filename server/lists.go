@@ -281,17 +281,20 @@ func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 	etag, err := rdb.Get(ctx, listKey(minReporters, minutes, "etag")).Result()
 	if err != nil {
 		debugf("list %d/%d: no etag in Redis (%v)", minReporters, minutes, err)
+		listMiss.Add(1)
 		return false
 	}
 
 	have := r.Header.Get("If-None-Match")
 	if have == etag {
+		listNotModified.Add(1)
 		writeList(w, r, etag, nil, false) // 304
 		return true
 	}
 
 	// Delta sync only for clients asking for it: others couldn't parse it.
 	if have != "" && r.URL.Query().Get("delta") == "1" && serveDelta(w, r, minReporters, minutes, have, etag) {
+		listDelta.Add(1)
 		return true
 	}
 
@@ -302,9 +305,11 @@ func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 	}
 	body, err := rdb.Get(ctx, listKey(minReporters, minutes, kind)).Bytes()
 	if err != nil {
+		listMiss.Add(1)
 		return false
 	}
 
+	listFull.Add(1)
 	writeList(w, r, etag, body, gzipped)
 	return true
 }

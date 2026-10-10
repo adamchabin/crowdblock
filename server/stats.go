@@ -5,7 +5,10 @@ import (
 	_ "embed"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,6 +27,70 @@ type statsResponse struct {
 	Hourly         []int          `json:"hourly"`          // reports per hour, last 24 h, oldest first
 	Sources        map[string]int `json:"sources"`         // reports 24 h by source
 	Countries      []countryCount `json:"countries"`       // top 10 by reported IPs, 24 h
+	Cache          cacheStats     `json:"cache"`
+}
+
+// Cache counters live in this process (atomics, no cost on the hot path)
+// and restart from zero with it.
+// shortcut: per instance, not summed over several instances; move to Redis
+// INCRs if that is ever needed.
+var (
+	cacheStart                                     = time.Now()
+	keyHits, keyMisses                             atomic.Int64 // API key auth: Redis / postgres
+	listFull, listNotModified, listDelta, listMiss atomic.Int64 // GET /ips: answered from Redis (3 ways) / computed from postgres
+)
+
+type cacheStats struct {
+	Since  time.Time `json:"since"`
+	APIKey struct {
+		Hits   int64 `json:"hits"`
+		Misses int64 `json:"misses"`
+	} `json:"api_key"`
+	Lists struct {
+		Full        int64 `json:"full"`
+		NotModified int64 `json:"not_modified"`
+		Delta       int64 `json:"delta"`
+		Misses      int64 `json:"misses"`
+	} `json:"lists"`
+	Redis *redisStats `json:"redis,omitempty"` // nil when Redis can't be asked
+}
+
+type redisStats struct {
+	Keys           int64 `json:"keys"`
+	UsedMemory     int64 `json:"used_memory"`
+	KeyspaceHits   int64 `json:"keyspace_hits"`
+	KeyspaceMisses int64 `json:"keyspace_misses"`
+}
+
+func computeCacheStats(ctx context.Context) cacheStats {
+	var c cacheStats
+	c.Since = cacheStart.UTC()
+	c.APIKey.Hits, c.APIKey.Misses = keyHits.Load(), keyMisses.Load()
+	c.Lists.Full, c.Lists.NotModified, c.Lists.Delta, c.Lists.Misses =
+		listFull.Load(), listNotModified.Load(), listDelta.Load(), listMiss.Load()
+
+	keys, err := rdb.DBSize(ctx).Result()
+	info, err2 := rdb.Info(ctx, "memory", "stats").Result()
+	if err == nil && err2 == nil {
+		r := &redisStats{Keys: keys}
+		for _, line := range strings.Split(info, "\n") {
+			k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+			n, _ := strconv.ParseInt(v, 10, 64)
+			if !ok {
+				continue
+			}
+			switch k {
+			case "used_memory":
+				r.UsedMemory = n
+			case "keyspace_hits":
+				r.KeyspaceHits = n
+			case "keyspace_misses":
+				r.KeyspaceMisses = n
+			}
+		}
+		c.Redis = r
+	}
+	return c
 }
 
 type countryCount struct {
@@ -56,7 +123,7 @@ func cachedStats(ctx context.Context) (*statsResponse, error) {
 }
 
 func computeStats(ctx context.Context) (*statsResponse, error) {
-	s := &statsResponse{GeneratedAt: time.Now().UTC(), Hourly: make([]int, 24), Sources: map[string]int{}, Countries: []countryCount{}}
+	s := &statsResponse{Cache: computeCacheStats(ctx), GeneratedAt: time.Now().UTC(), Hourly: make([]int, 24), Sources: map[string]int{}, Countries: []countryCount{}}
 
 	if err := db.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM users),
