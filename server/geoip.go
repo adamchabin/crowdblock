@@ -15,11 +15,28 @@ const defaultGeoIPDB = "geoip/dbip-country-lite.mmdb"
 
 var geoDB *maxminddb.Reader
 
+}
+
+// CountryNameMap maps 2-letter ISO codes to full English names. Populated with common
+// countries needing expanded display name. Extend this map as needed.
+var CountryNameMap = map[string]string{
+	"PL": "Poland",
+	"DK": "Denmark",
+	"NL": "Netherlands",
+	"DE": "Germany",
+	"FR": "France",
+	// Add other countries needing full name display here
+}
+
 type geoRecord struct {
 	Country struct {
 		ISOCode string `maxminddb:"iso_code"`
+		// Potential addition for full name if it existed in the DB schema.
+		// For now, we rely on our hardcoded map check first.
 	} `maxminddb:"country"`
 }
+
+func openGeoIP() {
 
 func openGeoIP() {
 	path := os.Getenv("GEOIP_DB")
@@ -37,8 +54,8 @@ func openGeoIP() {
 	log.Printf("GeoIP database %s loaded (%s)", path, db.Metadata.DatabaseType)
 }
 
-// countryOf returns the ISO 3166-1 alpha-2 code ("CN") for an address or
-// network ("1.2.3.0/24"), or "" when unknown.
+// countryOf returns the full English name for an address or network ("Poland"),
+// or the 2-letter ISO code if the full name is not mapped, with "" when unknown.
 func countryOf(ip string) string {
 	if geoDB == nil {
 		return ""
@@ -55,7 +72,13 @@ func countryOf(ip string) string {
 
 	var rec geoRecord
 	if err := geoDB.Lookup(addr).Decode(&rec); err != nil {
+		log.Printf("GeoIP lookup failed for %s: %v", ip, err) // Log failure but return ""
 		return ""
 	}
-	return rec.Country.ISOCode
+
+	isoCode := rec.Country.ISOCode
+	if name, ok := CountryNameMap[isoCode]; ok {
+		return name // Use the full English name from our map
+	}
+	return isoCode // Fall back to the standard 2-letter ISO code
 }
