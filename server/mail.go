@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/big"
@@ -12,19 +13,24 @@ import (
 	"strings"
 )
 
-// SMTP settings (all from the environment; without SMTP_HOST the
-// "register by e-mail" flow is disabled):
+// SMTP settings (all from the environment; the "register by e-mail" flow is
+// disabled unless all four are set):
 //
 //	SMTP_FROM      sender address, e.g. crowdblock@example.com
 //	SMTP_HOST      server address, host or host:port (default port 587)
-//	SMTP_USERNAME  login (optional: no auth when empty)
+//	SMTP_USERNAME  login
 //	SMTP_PASSWORD  password
 //
-// net/smtp upgrades to STARTTLS when the server offers it and refuses to
-// send the password over an unencrypted non-local connection.
+// The server always authenticates (AUTH PLAIN) and, except to localhost,
+// only over STARTTLS: the password is never sent unencrypted.
 // shortcut: implicit TLS (port 465) is not supported, use 587 + STARTTLS.
 func smtpConfigured() bool {
-	return os.Getenv("SMTP_HOST") != "" && os.Getenv("SMTP_FROM") != ""
+	for _, v := range []string{"SMTP_FROM", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"} {
+		if os.Getenv(v) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // parseEmail accepts a plain address ("user@example.com") only: no display
@@ -54,19 +60,14 @@ func generatePassword() (string, error) {
 }
 
 func sendPasswordMail(to, password string) error {
-	from, host := os.Getenv("SMTP_FROM"), os.Getenv("SMTP_HOST")
-	if from == "" || host == "" {
-		return errors.New("SMTP not configured")
+	if !smtpConfigured() {
+		return errors.New("SMTP not configured (SMTP_FROM, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD)")
 	}
-	if _, _, err := net.SplitHostPort(host); err != nil {
-		host = net.JoinHostPort(host, "587")
+	from, addr := os.Getenv("SMTP_FROM"), os.Getenv("SMTP_HOST")
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(addr, "587")
 	}
-	hostname, _, _ := net.SplitHostPort(host)
-
-	var auth smtp.Auth
-	if u := os.Getenv("SMTP_USERNAME"); u != "" {
-		auth = smtp.PlainAuth("", u, os.Getenv("SMTP_PASSWORD"), hostname)
-	}
+	host, _, _ := net.SplitHostPort(addr)
 
 	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: Your crowdblock account\r\n"+
 		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"+
@@ -74,5 +75,43 @@ func sendPasswordMail(to, password string) error {
 		"Use them to create an API key (POST /api/v1/api-keys).\r\n"+
 		"If this wasn't you, ignore this message: nobody can use the account without the password.\r\n",
 		from, to, to, password)
-	return smtp.SendMail(host, auth, from, []string{to}, []byte(msg))
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return fmt.Errorf("connect %s: %w", addr, err)
+	}
+	defer c.Close()
+	if err := c.Hello("localhost"); err != nil {
+		return fmt.Errorf("EHLO: %w", err)
+	}
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+			return fmt.Errorf("STARTTLS: %w", err)
+		}
+	} else if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return errors.New("server does not offer STARTTLS, refusing to send the password unencrypted")
+	}
+	if ok, _ := c.Extension("AUTH"); !ok {
+		return errors.New("server does not offer AUTH (after STARTTLS)")
+	}
+	if err := c.Auth(smtp.PlainAuth("", os.Getenv("SMTP_USERNAME"), os.Getenv("SMTP_PASSWORD"), host)); err != nil {
+		return fmt.Errorf("AUTH as %s: %w", os.Getenv("SMTP_USERNAME"), err)
+	}
+	if err := c.Mail(from); err != nil {
+		return fmt.Errorf("MAIL FROM: %w", err)
+	}
+	if err := c.Rcpt(to); err != nil {
+		return fmt.Errorf("RCPT TO: %w", err)
+	}
+	w, err := c.Data()
+	if err != nil {
+		return fmt.Errorf("DATA: %w", err)
+	}
+	if _, err := w.Write([]byte(msg)); err != nil {
+		return fmt.Errorf("DATA: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("DATA: %w", err)
+	}
+	return c.Quit()
 }

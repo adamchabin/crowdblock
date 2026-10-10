@@ -57,10 +57,10 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 | `LISTEN_ADDR` | `:8080` | |
 | `SMTP_FROM` | – | sender address of the registration e-mail |
 | `SMTP_HOST` | – | SMTP server, `host` or `host:port` (default port 587, STARTTLS) |
-| `SMTP_USERNAME` | – | SMTP login (no authentication when empty) |
+| `SMTP_USERNAME` | – | SMTP login (the server always authenticates) |
 | `SMTP_PASSWORD` | – | SMTP password |
 
-Registration by e-mail (the **Register** button, `POST /api/v1/register` with just `{"email"}`) is enabled when `SMTP_HOST` and `SMTP_FROM` are set; otherwise it answers 503. Sending a `password` too still registers directly, without any mail.
+Registration by e-mail (the **Register** button, `POST /api/v1/register` with just `{"email"}`) is enabled when all four `SMTP_*` variables are set; the server authenticates (AUTH PLAIN) over STARTTLS; otherwise it answers 503. Sending a `password` too still registers directly, without any mail.
 | `LIST_REFRESH` | `1m` | how often the IP lists are regenerated (Go duration) |
 | `DEBUG` | – | `true` also logs what happens behind the requests (lines prefixed `DEBUG`): list generation rounds (lock, query times, per list size / ETag / diff), why a delta falls back to the full list, delta cache hits, API key cache hits, accepted reports. ~25 lines per round, development only |
 | `GEOIP_DB` | `geoip/dbip-country-lite.mmdb` | relative to the working directory |
