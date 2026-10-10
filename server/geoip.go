@@ -15,8 +15,6 @@ const defaultGeoIPDB = "geoip/dbip-country-lite.mmdb"
 
 var geoDB *maxminddb.Reader
 
-}
-
 // CountryNameMap maps 2-letter ISO codes to full English names. Populated with common
 // countries needing expanded display name. Extend this map as needed.
 var CountryNameMap = map[string]string{
