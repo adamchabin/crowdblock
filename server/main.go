@@ -86,6 +86,12 @@ func main() {
 
 	openGeoIP()
 
+	if missing := smtpMissing(); len(missing) > 0 {
+		log.Printf("warning: registration by e-mail disabled, not set: %s", strings.Join(missing, ", "))
+	} else {
+		log.Printf("registration by e-mail enabled (SMTP %s as %s)", os.Getenv("SMTP_HOST"), os.Getenv("SMTP_USERNAME"))
+	}
+
 	go runListGenerator(ctx, listRefreshInterval())
 
 	mux := http.NewServeMux()
@@ -249,7 +255,8 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 // who has an account, and a stranger's address only ever gets one mail per
 // registerCooldown.
 func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
-	if !smtpConfigured() {
+	if missing := smtpMissing(); len(missing) > 0 {
+		log.Printf("register by e-mail unavailable: not set: %s", strings.Join(missing, ", "))
 		http.Error(w, "registration by e-mail is not available", http.StatusServiceUnavailable)
 		return
 	}

@@ -24,13 +24,16 @@ import (
 // The server always authenticates (AUTH PLAIN) and, except to localhost,
 // only over STARTTLS: the password is never sent unencrypted.
 // shortcut: implicit TLS (port 465) is not supported, use 587 + STARTTLS.
-func smtpConfigured() bool {
+func smtpConfigured() bool { return len(smtpMissing()) == 0 }
+
+// smtpMissing lists the unset SMTP_* variables (names only, never values).
+func smtpMissing() (missing []string) {
 	for _, v := range []string{"SMTP_FROM", "SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD"} {
 		if os.Getenv(v) == "" {
-			return false
+			missing = append(missing, v)
 		}
 	}
-	return true
+	return
 }
 
 // parseEmail accepts a plain address ("user@example.com") only: no display
@@ -76,6 +79,7 @@ func sendPasswordMail(to, password string) error {
 		"If this wasn't you, ignore this message: nobody can use the account without the password.\r\n",
 		from, to, to, password)
 
+	debugf("smtp: sending password mail to %s via %s as %s", to, addr, os.Getenv("SMTP_USERNAME"))
 	c, err := smtp.Dial(addr)
 	if err != nil {
 		return fmt.Errorf("connect %s: %w", addr, err)
@@ -84,6 +88,9 @@ func sendPasswordMail(to, password string) error {
 	if err := c.Hello("localhost"); err != nil {
 		return fmt.Errorf("EHLO: %w", err)
 	}
+	hasTLS, _ := c.Extension("STARTTLS")
+	hasAuth, authMechs := c.Extension("AUTH")
+	debugf("smtp: connected to %s, STARTTLS offered=%v, AUTH offered (before TLS)=%v %s", addr, hasTLS, hasAuth, authMechs)
 	if ok, _ := c.Extension("STARTTLS"); ok {
 		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 			return fmt.Errorf("STARTTLS: %w", err)
@@ -97,6 +104,7 @@ func sendPasswordMail(to, password string) error {
 	if err := c.Auth(smtp.PlainAuth("", os.Getenv("SMTP_USERNAME"), os.Getenv("SMTP_PASSWORD"), host)); err != nil {
 		return fmt.Errorf("AUTH as %s: %w", os.Getenv("SMTP_USERNAME"), err)
 	}
+	debugf("smtp: authenticated as %s", os.Getenv("SMTP_USERNAME"))
 	if err := c.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
@@ -113,5 +121,6 @@ func sendPasswordMail(to, password string) error {
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("DATA: %w", err)
 	}
+	debugf("smtp: mail to %s accepted by %s", to, addr)
 	return c.Quit()
 }
