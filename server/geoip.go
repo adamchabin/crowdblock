@@ -45,6 +45,9 @@ var CountryNameMap = map[string]string{
 	"AE": "United Arab Emirates",
 	"KR": "South Korea",
 	"TH": "Thailand",
+	"SG": "Singapore",
+	"AD": "Andorra",
+	"GB": "United Kingdom",
 	// Add other countries needing full name display here
 }
 
