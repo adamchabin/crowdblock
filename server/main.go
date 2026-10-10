@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -198,12 +199,27 @@ func formatBytes(n int64) string {
 
 type registerRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
+	Password string `json:"password"` // optional: when empty, a password is generated and e-mailed
 }
+
+// Per client address; behind a reverse proxy this is the proxy's address.
+// shortcut: no per-email limit besides the cooldown, add one if abused.
+const (
+	registerPerHour  = 5
+	registerCooldown = 10 * time.Minute // between mails to the same address
+)
 
 func handleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || len(req.Password) < 8 {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" {
+		http.Error(w, "invalid data (email required)", http.StatusBadRequest)
+		return
+	}
+	if req.Password == "" {
+		registerByEmail(w, r, req.Email)
+		return
+	}
+	if len(req.Password) < 8 {
 		http.Error(w, "invalid data (email + password min. 8 characters)", http.StatusBadRequest)
 		return
 	}
@@ -225,6 +241,85 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{"user_id": userID})
+}
+
+// registerByEmail creates the account with a generated password and mails it.
+// The answer is the same whether or not the address was already registered
+// (an existing account is left untouched), so it can't be used to find out
+// who has an account, and a stranger's address only ever gets one mail per
+// registerCooldown.
+func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
+	if !smtpConfigured() {
+		http.Error(w, "registration by e-mail is not available", http.StatusServiceUnavailable)
+		return
+	}
+	email, ok := parseEmail(rawEmail)
+	if !ok {
+		http.Error(w, "invalid e-mail address", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ipKey := "register:ip:" + host
+	n, err := rdb.Incr(ctx, ipKey).Result()
+	if err != nil {
+		log.Printf("redis INCR %s: %v", ipKey, err)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	if n == 1 {
+		rdb.Expire(ctx, ipKey, time.Hour)
+	}
+	if n > registerPerHour {
+		http.Error(w, "too many registrations, try again later", http.StatusTooManyRequests)
+		return
+	}
+
+	// Same bcrypt cost for new and existing addresses: no timing difference.
+	password, err := generatePassword()
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+
+	const reply = "If the address is valid, an e-mail with the password is on its way."
+	mailKey := "register:mail:" + strings.ToLower(email)
+	if fresh, err := rdb.SetNX(ctx, mailKey, 1, registerCooldown).Result(); err != nil || !fresh {
+		writeJSON(w, http.StatusAccepted, map[string]string{"message": reply})
+		return
+	}
+
+	var userID string
+	err = db.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash) VALUES ($1, $2)
+		 ON CONFLICT (email) DO NOTHING RETURNING id`, email, string(hash)).Scan(&userID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows): // already registered: send nothing
+	case err != nil:
+		rdb.Del(ctx, mailKey)
+		log.Printf("register %s: %v", email, err)
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	default:
+		// Sent in the background so the response time doesn't depend on SMTP.
+		// If the mail can't be sent the account is removed again, so the user
+		// can register again instead of owning a password nobody received.
+		go func() {
+			if err := sendPasswordMail(email, password); err != nil {
+				log.Printf("register: mail to %s failed: %v", email, err)
+				bg := context.Background()
+				_, _ = db.Exec(bg, `DELETE FROM users WHERE id = $1`, userID)
+				rdb.Del(bg, mailKey)
+			}
+		}()
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"message": reply})
 }
 
 // ---------- API KEYS ----------

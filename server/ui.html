@@ -22,12 +22,33 @@
   .bar span:nth-child(3) { text-align:right; font-variant-numeric:tabular-nums; }
   .bar div { background:var(--bar); height:10px; border-radius:3px; }
   #err { color:#dc2626; }
+  header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+  button { font:inherit; padding:7px 14px; border:0; border-radius:8px; background:var(--bar); color:#fff; cursor:pointer; }
+  button.plain { background:transparent; color:var(--mute); }
+  button:disabled { opacity:.6; cursor:default; }
+  dialog { border:0; border-radius:12px; padding:20px; background:var(--card); color:var(--fg); width:min(360px,92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.45); }
+  dialog h2 { margin-top:0; } dialog input { width:100%; box-sizing:border-box; font:inherit; padding:8px; margin:8px 0 4px; }
+  dialog menu { display:flex; justify-content:flex-end; gap:8px; padding:0; margin:14px 0 0; }
+  #msg { min-height:1.3em; font-size:13px; } #msg.bad { color:#dc2626; }
 </style>
 </head>
 <body>
 <main>
-  <h1>crowdblock</h1>
-  <div class="mute">Crowd-sourced blocklist &middot; <span id="when">loading…</span> <span id="err"></span></div>
+  <header>
+    <div><h1>crowdblock</h1>
+      <div class="mute">Crowd-sourced blocklist &middot; <span id="when">loading…</span> <span id="err"></span></div></div>
+    <button id="reg">Register</button>
+  </header>
+  <dialog id="dlg">
+    <form id="form" method="dialog">
+      <h2>Register</h2>
+      <div class="mute">We'll e-mail you a generated password.</div>
+      <input id="email" type="email" required maxlength="254" autocomplete="email" placeholder="you@example.com">
+      <div id="msg"></div>
+      <menu><button type="button" class="plain" id="cancel">Close</button><button id="send">Send password</button></menu>
+    </form>
+  </dialog>
   <div class="grid" id="cards"></div>
   <div class="card"><h2>Reports per hour, last 24 h</h2><div class="chart" id="hourly"></div>
     <div class="axis mute"><span>24 h ago</span><span>now</span></div></div>
@@ -79,6 +100,21 @@ async function load() {
     $('err').textContent = ' · cannot load stats: ' + e.message;
   }
 }
+$('reg').onclick = () => { $('msg').textContent = ''; $('msg').className = ''; $('dlg').showModal(); $('email').focus(); };
+$('cancel').onclick = () => $('dlg').close();
+$('form').onsubmit = async (ev) => {
+  ev.preventDefault();
+  const msg = $('msg'), send = $('send');
+  send.disabled = true; msg.className = ''; msg.textContent = 'Sending…';
+  try {
+    const r = await fetch('/api/v1/register', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: $('email').value.trim() }) });
+    if (r.status === 202) { msg.textContent = 'Check your inbox: the password is on its way.'; $('email').value = ''; }
+    else { msg.className = 'bad'; msg.textContent = (await r.text()).trim() || 'HTTP ' + r.status; }
+  } catch (e) { msg.className = 'bad'; msg.textContent = 'Network error: ' + e.message; }
+  send.disabled = false;
+};
+
 load();
 setInterval(load, 60000);
 </script>

@@ -42,3 +42,23 @@ func TestIsPublicIP(t *testing.T) {
 		}
 	}
 }
+
+func TestParseEmail(t *testing.T) {
+	for in, want := range map[string]bool{
+		"user@example.com": true, " user@example.com ": true, "a.b+c@example.co.uk": true,
+		"": false, "user": false, "Name <user@example.com>": false,
+		"a@example.com\r\nBcc: x@example.com": false, "a@b.c, d@e.f": false,
+	} {
+		if _, ok := parseEmail(in); ok != want {
+			t.Errorf("parseEmail(%q) = %v, want %v", in, ok, want)
+		}
+	}
+}
+
+func TestGeneratePassword(t *testing.T) {
+	a, _ := generatePassword()
+	b, _ := generatePassword()
+	if len(a) != 16 || a == b {
+		t.Errorf("bad passwords %q %q", a, b)
+	}
+}
