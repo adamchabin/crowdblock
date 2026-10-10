@@ -57,8 +57,6 @@ type geoRecord struct {
 }
 
 func openGeoIP() {
-
-func openGeoIP() {
 	path := os.Getenv("GEOIP_DB")
 	if path == "" {
 		path = defaultGeoIPDB
