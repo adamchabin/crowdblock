@@ -7,8 +7,8 @@
 <style>
   :root { color-scheme: light dark; --bg:#f6f7f9; --card:#fff; --fg:#1a1d21; --mute:#6b7280; --bar:#3b82f6; }
   @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1b1f25; --fg:#e6e8eb; --mute:#8b93a0; --bar:#60a5fa; } }
-  body { margin:0; font:15px system-ui,sans-serif; background:var(--bg); color:var(--fg); }
-  main { max-width:960px; margin:0 auto; padding:24px 16px; }
+  body { margin:0; font:15px system-ui,sans-serif; background:var(--bg); color:var(--fg); min-height:100vh; }
+  main { max-width:none; margin:0; padding:24px 16px; width:100%; }
   h1 { font-size:20px; margin:0 0 4px; } .mute { color:var(--mute); font-size:13px; }
   .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); margin:20px 0; }
   .card { background:var(--card); border-radius:10px; padding:14px 16px; }
