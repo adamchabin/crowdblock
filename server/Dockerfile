@@ -10,12 +10,20 @@ ARG VERSION=dev
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
 
 COPY server/ server/
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server ./server
 
+# Country database, current at build time (DB-IP Lite, CC BY 4.0, updated
+# monthly). Mount a newer one over /app/geoip/dbip-country-lite.mmdb or set
+# GEOIP_DB to update it without a rebuild.
+FROM --platform=$BUILDPLATFORM alpine:3 AS geoip
+RUN apk add --no-cache curl \
+    && mkdir /geoip \
+    && curl -sSf "https://download.db-ip.com/free/dbip-country-lite-$(date -u +%Y-%m).mmdb.gz" \
+       | gunzip > /geoip/dbip-country-lite.mmdb
 # Country database, current at build time (DB-IP Lite, CC BY 4.0, updated
 # monthly). Mount a newer one over /app/geoip/dbip-country-lite.mmdb or set
 # GEOIP_DB to update it without a rebuild.
