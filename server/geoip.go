@@ -1,3 +1,5 @@
+package geodb
+
 // GeoDBReader definiuje interfejs potrzebny do wyszukiwania adresów IP,
 // co umożliwia testowanie (mockowanie) w modułach biznesowych.
 type GeoDBReader interface {
