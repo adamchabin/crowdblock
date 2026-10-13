@@ -51,6 +51,8 @@ var countryNameMap = map[string]string{
 	"GB": "United Kingdom",
 	"SG": "Singapore",
 	"PL": "Poland",
+	// Dodaj fallback dla adresów nieznanych
+	"ZZ": "Unknown", 
 	// ... inne kraje
 }
 
@@ -61,17 +63,19 @@ type MockGeoDBReader struct{}
 
 // Lookup zwraca predefiniowane kody ISO dla testów.
 func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, error) {
-	if addr.String() == "192.0.2.1" {
+	ip := addr.String()
+
+	if ip == "192.0.2.1" {
 		return "US", nil // USA
 	}
-	if addr.String() == "88.99.10.10" {
+	if ip == "88.99.10.10" {
 		return "PL", nil // Polska
 	}
-	if addr.String() == "203.0.113.42" {
+	if ip == "203.0.113.42" {
 		return "SG", nil // Singapore
 	}
-	// Dla każdego innego IP zwracamy pusty kod, aby test fallbacku.
-	return "", nil 
+	// Dla każdego innego IP, w tym adresów np. 36.75.4.115, zwracamy "ZZ".
+	return "ZZ", nil 
 }
 
 // --- Funkcja CountryNameMap - dla kompletności i testowalności ---
