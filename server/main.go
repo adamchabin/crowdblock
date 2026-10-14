@@ -104,6 +104,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/account", handleDeleteAccount)
 	mux.HandleFunc("POST /api/v1/reports", handleReportIP)
 	mux.HandleFunc("GET /api/v1/ips", handleListIPs)
+	mux.HandleFunc("GET /api/v1/geoip/{ip}", handleGeoIP)
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
@@ -766,6 +767,20 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeListPayload(w, r, p)
+}
+
+// handleGeoIP returns the country for a given IP address.
+// GET /api/v1/geoip/{ip} – public, no auth required.
+func handleGeoIP(w http.ResponseWriter, r *http.Request) {
+	ipStr := r.PathValue("ip")
+	addr, err := netip.ParseAddr(ipStr)
+	if err != nil || !isPublicIP(addr) {
+		http.Error(w, "invalid data (ip must be a public IPv4/IPv6 address)", http.StatusBadRequest)
+		return
+	}
+	addr = addr.Unmap()
+	country := countryOf(addr, geoDB)
+	writeJSON(w, http.StatusOK, map[string]string{"ip": addr.String(), "country": country})
 }
 
 // queryIPList returns the addresses reported by at least minReporters
