@@ -785,7 +785,19 @@ func handleGeoIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addr = addr.Unmap()
+	
+	// DEBUG: Log incoming GeoIP query
+	if debug {
+		log.Printf("DEBUG: GeoIP query received for IP %s from %s", ipStr, r.RemoteAddr)
+	}
+	
 	country := countryOf(addr, geoDB)
+	
+	// DEBUG: Log the ISO code result
+	if debug {
+		log.Printf("DEBUG: ISO code %q looked up for IP %s", country, ipStr)
+	}
+	
 	writeJSON(w, http.StatusOK, map[string]string{"ip": addr.String(), "country": country})
 }
 
