@@ -314,28 +314,6 @@ var countryMap = map[string]string{
     "ZZ": "Unknown",
 }
 
-// --- Mock Implementacje dla Testów ---
-
-// MockGeoDBReader implementuje interfejs GeoDBReader i symuluje funkcjonalność MaxMind.
-type MockGeoDBReader struct{}
-
-// Lookup zwraca predefiniowane kody ISO dla testów.
-func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, error) {
-	ip := addr.String()
-
-	if ip == "192.0.2.1" {
-		return "US", nil // USA
-	}
-	if ip == "88.99.10.10" {
-		return "PL", nil // Polska
-	}
-	if ip == "203.0.113.42" {
-		return "SG", nil // Singapore
-	}
-	// Dla każdego innego IP, w tym adresów np. 36.75.4.115, zwracamy "ZZ".
-	return "ZZ", nil
-}
-
 // --- Funkcja CountryNameMap - dla kompletności i testowalności ---
 // Zostawmy to jako miejsce, gdzie będzie zaimplementowana pełna logika mapowania.
 func getCountryName(isoCode string) string {
