@@ -9,10 +9,12 @@ ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 
 WORKDIR /src
-COPY go.mod go.sum ./
+# Copy server module files first for proper dependency resolution
+COPY server/go.mod server/go.sum ./
 RUN go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
 
-COPY . .
+# Copy server source code
+COPY server/*.go ./
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server .
 
