@@ -84,7 +84,13 @@ func main() {
 	}
 	defer rdb.Close()
 
-	openGeoIP("/path/to/geoip/database.mmdb")
+	dbPath := os.Getenv("GEOIP_DB")
+	if dbPath == "" {
+		dbPath = "geoip/dbip-country-lite.mmdb"
+	}
+	if err := openGeoIP(dbPath); err != nil {
+		log.Fatalf("cannot open GeoIP database: %v", err)
+	}
 
 	if missing := smtpMissing(); len(missing) > 0 {
 		log.Printf("warning: registration by e-mail disabled, not set: %s", strings.Join(missing, ", "))
