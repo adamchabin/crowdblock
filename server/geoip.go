@@ -53,11 +53,6 @@ func countryOf(addr netip.Addr, reader GeoDBReader) (code, name string) {
 	// 1. Lookup bazy danych za pomocą przekazanego czytnika
 	isoCode, name, err := reader.Lookup(addr)
 
-	// DEBUG: Log the lookup result
-	if debug {
-		log.Printf("DEBUG: GeoIP lookup result: isoCode=%q, name=%q, err=%v", isoCode, name, err)
-	}
-
 	if err != nil || isoCode == "" {
 		return "Unknown", "Unknown"
 	}
