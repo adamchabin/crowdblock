@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -19,9 +20,9 @@ func isTrue(v string) bool {
 	return false
 }
 
-// debugf logs with a "DEBUG " prefix when DEBUG is enabled.
+// debugf logs at debug level; visible when DEBUG enables debug logging.
 func debugf(format string, args ...any) {
 	if debug {
-		log.Printf("DEBUG "+format, args...)
+		slog.Debug(fmt.Sprintf(format, args...))
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -131,7 +131,7 @@ func listRefreshInterval() time.Duration {
 		if d, err := time.ParseDuration(v); err == nil && d >= time.Second {
 			return d
 		}
-		log.Printf("warning: invalid LIST_REFRESH %q, using %s", v, defaultListRefresh)
+		slog.Warn("invalid LIST_REFRESH, using default", "value", v, "default", defaultListRefresh)
 	}
 	return defaultListRefresh
 }
@@ -147,10 +147,10 @@ func runListGenerator(ctx context.Context, interval time.Duration) {
 		switch {
 		case err != nil && !failing:
 			// Logged once until it works again (Redis down = every round).
-			log.Printf("list generation failed: %v", err)
+			slog.Error("list generation failed", "err", err)
 			failing = true
 		case err == nil && failing:
-			log.Printf("list generation works again (%d lists in %s)", n, time.Since(start).Round(time.Millisecond))
+			slog.Info("list generation recovered", "lists", n, "duration", time.Since(start).Round(time.Millisecond))
 			failing = false
 		}
 

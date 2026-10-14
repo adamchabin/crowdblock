@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"net/netip"
 
 	maxminddb "github.com/oschwald/maxminddb-golang"
@@ -43,7 +43,7 @@ func openGeoIP(dbPath string) error {
 		return err
 	}
 	geoDB = &RealGeoDBReader{db: db}
-	log.Printf("GeoIP DB loaded from %s", dbPath)
+	slog.Info("GeoIP DB loaded", "path", dbPath)
 	return nil
 }
 

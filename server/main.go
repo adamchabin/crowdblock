@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"io"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -40,37 +41,49 @@ var version = "dev"
 var db *pgxpool.Pool
 var rdb *redis.Client
 
-func main() {
-	log.Printf("crowdblock server %s", version)
+// setupLogging configures slog; DEBUG=true enables debug level.
+func setupLogging() {
+	level := slog.LevelInfo
 	if debug {
-		log.Printf("DEBUG logging enabled")
+		level = slog.LevelDebug
 	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+}
+
+func main() {
+	setupLogging()
+	slog.Info("starting server", "version", version)
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		log.Fatal("DATABASE_URL not set")
+		slog.Error("DATABASE_URL not set")
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
 
 	if err := EnsureDatabase(ctx, dsn); err != nil {
-		log.Fatalf("cannot prepare database: %v", err)
+		slog.Error("cannot prepare database", "err", err)
+		os.Exit(1)
 	}
 
 	var err error
 	db, err = pgxpool.New(ctx, dsn)
 	if err != nil {
-		log.Fatalf("cannot connect to database: %v", err)
+		slog.Error("cannot connect to database", "err", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	if err := EnsureSchema(ctx, db); err != nil {
-		log.Fatalf("cannot apply schema: %v", err)
+		slog.Error("cannot apply schema", "err", err)
+		os.Exit(1)
 	}
 
 	if os.Getenv("SEED_DEV_DATA") == "1" {
 		if err := EnsureSeed(ctx, db); err != nil {
-			log.Fatalf("cannot load seed data: %v", err)
+			slog.Error("cannot load seed data", "err", err)
+			os.Exit(1)
 		}
 	}
 
@@ -80,7 +93,7 @@ func main() {
 	}
 	rdb = redis.NewClient(&redis.Options{Addr: redisAddr})
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		log.Printf("warning: cannot connect to redis at %s, API key auth will always hit postgres: %v", redisAddr, err)
+		slog.Warn("redis unavailable, API key auth will hit postgres", "addr", redisAddr, "err", err)
 	}
 	defer rdb.Close()
 
@@ -89,13 +102,14 @@ func main() {
 		dbPath = "geoip/dbip-country-lite.mmdb"
 	}
 	if err := openGeoIP(dbPath); err != nil {
-		log.Fatalf("cannot open GeoIP database: %v", err)
+		slog.Error("cannot open GeoIP database", "err", err)
+		os.Exit(1)
 	}
 
 	if missing := smtpMissing(); len(missing) > 0 {
-		log.Printf("warning: registration by e-mail disabled, not set: %s", strings.Join(missing, ", "))
+		slog.Warn("registration by e-mail disabled", "missing", strings.Join(missing, ", "))
 	} else {
-		log.Printf("registration by e-mail enabled (SMTP %s as %s)", os.Getenv("SMTP_HOST"), os.Getenv("SMTP_USERNAME"))
+		slog.Info("registration by e-mail enabled", "host", os.Getenv("SMTP_HOST"))
 	}
 
 	go runListGenerator(ctx, listRefreshInterval())
@@ -116,7 +130,7 @@ func main() {
 	if addr == "" {
 		addr = ":8080"
 	}
-	log.Printf("server listening on %s", addr)
+	slog.Info("server listening", "addr", addr)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           logRequests(mux),
@@ -125,7 +139,8 @@ func main() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	log.Fatal(srv.ListenAndServe())
+	slog.Error("server failed", "err", srv.ListenAndServe())
+	os.Exit(1)
 }
 
 // logRequests logs every incoming HTTP request to the console: method, path,
@@ -263,7 +278,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 // registerCooldown.
 func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 	if missing := smtpMissing(); len(missing) > 0 {
-		log.Printf("register by e-mail unavailable: not set: %s", strings.Join(missing, ", "))
+		slog.Warn("register by e-mail unavailable", "missing", strings.Join(missing, ", "))
 		http.Error(w, "registration by e-mail is not available", http.StatusServiceUnavailable)
 		return
 	}
@@ -278,7 +293,7 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 	ipKey := "register:ip:" + host
 	n, err := rdb.Incr(ctx, ipKey).Result()
 	if err != nil {
-		log.Printf("redis INCR %s: %v", ipKey, err)
+		slog.Warn("redis INCR failed", "key", ipKey, "err", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -317,7 +332,7 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 	case errors.Is(err, pgx.ErrNoRows): // already registered: send nothing
 	case err != nil:
 		rdb.Del(ctx, mailKey)
-		log.Printf("register %s: %v", email, err)
+		slog.Error("register failed", "email", email, "err", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	default:
@@ -326,7 +341,7 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 		// can register again instead of owning a password nobody received.
 		go func() {
 			if err := sendPasswordMail(email, password); err != nil {
-				log.Printf("register: mail to %s failed: %v", email, err)
+				slog.Warn("registration mail failed", "email", email, "err", err)
 				bg := context.Background()
 				_, _ = db.Exec(bg, `DELETE FROM users WHERE id = $1`, userID)
 				rdb.Del(bg, mailKey)
@@ -431,7 +446,7 @@ func forgetAPIKeys(ctx context.Context, hashes ...string) {
 		return
 	}
 	if err := rdb.Del(ctx, keys...).Err(); err != nil {
-		log.Printf("redis DEL error for %d api keys: %v", len(keys), err)
+		slog.Warn("redis DEL failed", "keys", len(keys), "err", err)
 	}
 }
 
@@ -537,7 +552,7 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		}); err != nil {
-			log.Printf("redis ZREM for deleted user %s: %v", userID, err)
+			slog.Warn("redis ZREM failed", "user", userID, "err", err)
 		}
 	}
 	forgetAPIKeys(r.Context(), hashes...)
@@ -605,7 +620,7 @@ func handleReportIP(w http.ResponseWriter, r *http.Request) {
 
 	blacklisted, err := maybeBlacklist(r.Context(), req.IP, userID)
 	if err != nil {
-		log.Printf("blacklist aggregation error for %s: %v", req.IP, err)
+		slog.Warn("blacklist aggregation failed", "ip", req.IP, "err", err)
 	}
 
 	debugf("report %s source=%q by user %s (key %s)", req.IP, req.Source, userID, apiKeyID)
@@ -634,7 +649,7 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 			return id, uid, nil
 		}
 	} else if cacheErr != redis.Nil {
-		log.Printf("redis GET error for %s: %v", cacheKey, cacheErr)
+		slog.Warn("redis GET failed", "key", cacheKey, "err", cacheErr)
 	}
 
 	keyMisses.Add(1)
@@ -648,7 +663,7 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 	debugf("api key %s: from database, cached for %s", apiKeyID, apiKeyCacheTTL)
 
 	if setErr := rdb.Set(ctx, cacheKey, apiKeyID+"|"+userID, apiKeyCacheTTL).Err(); setErr != nil {
-		log.Printf("redis SET error for %s: %v", cacheKey, setErr)
+		slog.Warn("redis SET failed", "key", cacheKey, "err", setErr)
 	}
 
 	return
@@ -763,7 +778,7 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 	debugf("list %d/%d: not in Redis, computing from PostgreSQL", minReporters, minutes)
 	result, err := queryIPList(r.Context(), minutes, minReporters)
 	if err != nil {
-		log.Printf("list query failed: %v", err)
+		slog.Error("list query failed", "err", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -789,14 +804,14 @@ func handleGeoIP(w http.ResponseWriter, r *http.Request) {
 
 	// DEBUG: Log incoming GeoIP query
 	if debug {
-		log.Printf("DEBUG: GeoIP query received for IP %s from %s", ipStr, r.RemoteAddr)
+		slog.Debug("geoip query", "ip", ipStr, "from", r.RemoteAddr)
 	}
 
 	code, name := countryOf(addr, geoDB)
 
 	// DEBUG: Log the ISO code result
 	if debug {
-		log.Printf("DEBUG: ISO code %q (%q) looked up for IP %s", code, name, ipStr)
+		slog.Debug("geoip result", "code", code, "name", name, "ip", ipStr)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"ip": addr.String(), "country": code, "country_name": name})

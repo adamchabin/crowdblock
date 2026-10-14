@@ -3,6 +3,8 @@ package main
 import (
 	"net/netip"
 	"testing"
+
+	maxminddb "github.com/oschwald/maxminddb-golang"
 )
 
 // Testy jednostkowe skupiają się na logice wywołania, a nie na faktycznym piśmiennictwie bazy danych,
@@ -78,4 +80,9 @@ func TestCountryOf_InvalidInput(t *testing.T) {
 		// Jeśli kiedykolwiek dodamy logikę symulacji błędnego lutowania, test ma się poprawnie zachować.
 		t.Skip("Symulacja złego odczytu wymagałaby modyfikacji MockGeoDBReader.Zaplanowano.")
 	})
+}
+
+// openGeoIPForBench opens the MaxMind DB for benchmarking.
+func openGeoIPForBench(path string) (*maxminddb.Reader, error) {
+	return maxminddb.Open(path)
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"strings"
 
@@ -56,7 +56,7 @@ func EnsureDatabase(ctx context.Context, dsn string) error {
 	if err != nil {
 		return fmt.Errorf("cannot create database %q: %w", dbName, err)
 	}
-	log.Printf("created database %q", dbName)
+	slog.Info("database created", "name", dbName)
 	return nil
 }
 
@@ -65,7 +65,7 @@ func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("cannot apply schema: %w", err)
 	}
-	log.Println("database schema OK")
+	slog.Info("database schema OK")
 	return nil
 }
 
@@ -75,6 +75,6 @@ func EnsureSeed(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, seedSQL); err != nil {
 		return fmt.Errorf("cannot apply seed data: %w", err)
 	}
-	log.Println("development seed data loaded")
+	slog.Info("development seed data loaded")
 	return nil
 }
