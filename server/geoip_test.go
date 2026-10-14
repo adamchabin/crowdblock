@@ -1,7 +1,12 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"reflect"
+	"strings"
 	"testing"
 
 	maxminddb "github.com/oschwald/maxminddb-golang"
@@ -85,4 +90,67 @@ func TestCountryOf_InvalidInput(t *testing.T) {
 // openGeoIPForBench opens the MaxMind DB for benchmarking.
 func openGeoIPForBench(path string) (*maxminddb.Reader, error) {
 	return maxminddb.Open(path)
+}
+
+func TestHandleGeoIPBatch(t *testing.T) {
+	old := geoDB
+	geoDB = &MockGeoDBReader{}
+	t.Cleanup(func() { geoDB = old })
+
+	tooMany := `{"ips":[` + strings.TrimSuffix(strings.Repeat(`"8.8.8.8",`, maxGeoIPBatch+1), ",") + `]}`
+
+	tests := []struct {
+		name string
+		body string
+		code int
+		want []map[string]string
+	}{
+		{
+			name: "known, invalid and private",
+			body: `{"ips":["88.99.10.10","not-an-ip","10.0.0.1"]}`,
+			code: http.StatusOK,
+			want: []map[string]string{
+				{"ip": "88.99.10.10", "country": "PL", "country_name": "Poland"},
+				{"ip": "not-an-ip", "country": "Unknown", "country_name": "Unknown"},
+				{"ip": "10.0.0.1", "country": "Unknown", "country_name": "Unknown"},
+			},
+		},
+		{
+			name: "empty list",
+			body: `{"ips":[]}`,
+			code: http.StatusOK,
+			want: []map[string]string{},
+		},
+		{
+			name: "over limit",
+			body: tooMany,
+			code: http.StatusBadRequest,
+		},
+		{
+			name: "not json",
+			body: `nope`,
+			code: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/geoip/batch", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			handleGeoIPBatch(w, r)
+			if w.Code != tt.code {
+				t.Fatalf("status = %d, want %d (body %q)", w.Code, tt.code, w.Body.String())
+			}
+			if tt.want == nil {
+				return
+			}
+			var got []map[string]string
+			if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
 }

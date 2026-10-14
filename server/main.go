@@ -36,6 +36,7 @@ const (
 	blacklistThreshold = 5
 	apiKeyCacheTTL     = 60 * time.Second
 	maxBodyBytes       = 4 << 10 // all request bodies are tiny JSON objects
+	maxGeoIPBatch      = 100
 )
 
 // Set at build time: go build -ldflags "-X main.version=v1.2.3"
@@ -139,6 +140,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/reports", handleReportIP)
 	mux.HandleFunc("GET /api/v1/ips", handleListIPs)
 	mux.HandleFunc("GET /api/v1/geoip/{ip}", handleGeoIP)
+	mux.HandleFunc("POST /api/v1/geoip/batch", handleGeoIPBatch)
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
@@ -846,6 +848,36 @@ func handleGeoIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"ip": addr.String(), "country": code, "country_name": name})
+}
+
+// handleGeoIPBatch returns the country for each of the given IP addresses.
+// POST /api/v1/geoip/batch with {"ips": [...]} - public, no auth required.
+// Addresses that fail to parse or are not public get "Unknown", like a
+// missed database lookup; the batch itself still returns 200.
+func handleGeoIPBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IPs []string `json:"ips"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid data (json object with ips list required)", http.StatusBadRequest)
+		return
+	}
+	if len(req.IPs) > maxGeoIPBatch {
+		http.Error(w, "invalid data (up to "+strconv.Itoa(maxGeoIPBatch)+" ips per request)", http.StatusBadRequest)
+		return
+	}
+	out := make([]map[string]string, 0, len(req.IPs))
+	for _, ipStr := range req.IPs {
+		addr, err := netip.ParseAddr(ipStr)
+		if err != nil || !isPublicIP(addr) {
+			out = append(out, map[string]string{"ip": ipStr, "country": "Unknown", "country_name": "Unknown"})
+			continue
+		}
+		addr = addr.Unmap()
+		code, name := countryOf(addr, geoDB)
+		out = append(out, map[string]string{"ip": addr.String(), "country": code, "country_name": name})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // queryIPList returns the addresses reported by at least minReporters
