@@ -1,4 +1,4 @@
-package geodb
+package main
 
 // GeoDBReader definiuje interfejs potrzebny do wyszukiwania adresów IP,
 // co umożliwia testowanie (mockowanie) w modułach biznesowych.
