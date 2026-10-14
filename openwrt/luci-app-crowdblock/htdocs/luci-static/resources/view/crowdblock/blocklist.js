@@ -44,6 +44,9 @@ function format_country(cc) {
 	if (!cc || cc.length != 2)
 		return '-';
 
+	// Convert to uppercase for lookup
+	const upperCc = cc.toUpperCase();
+
 	// Common country code to name mapping
 	const countryNames = {
 		'AD': 'Andorra', 'AE': 'United Arab Emirates', 'AF': 'Afghanistan',
@@ -122,8 +125,8 @@ function format_country(cc) {
 		'ZA': 'South Africa', 'ZM': 'Zambia', 'ZW': 'Zimbabwe'
 	};
 
-	const flag = String.fromCodePoint(0x1F1E6 + cc.charCodeAt(0) - 65, 0x1F1E6 + cc.charCodeAt(1) - 65);
-	const countryName = countryNames[cc] || cc; // Fallback to code if not found
+	const flag = String.fromCodePoint(0x1F1E6 + upperCc.charCodeAt(0) - 65, 0x1F1E6 + upperCc.charCodeAt(1) - 65);
+	const countryName = countryNames[upperCc] || upperCc; // Fallback to uppercase code if not found
 	return flag + ' ' + countryName;
 }
 
