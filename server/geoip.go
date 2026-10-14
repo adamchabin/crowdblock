@@ -26,7 +26,7 @@ func (r *RealGeoDBReader) Lookup(addr netip.Addr) (string, error) {
 	var result struct {
 		Country struct {
 			ISOCode string `maxminddb:"iso_code"`
-		}
+		} `maxminddb:"country"`
 	}
 	if err := r.db.Lookup(addr.AsSlice(), &result); err != nil {
 		return "", err
