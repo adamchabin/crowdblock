@@ -1,0 +1,20 @@
+{
+	"luci-app-crowdblock": {
+		"description": "Grant access to crowdblock configuration and state",
+		"read": {
+			"cgi-io": [ "download" ],
+			"file": {
+				"/tmp/crowdblock/state.json": [ "read" ]
+			},
+			"uci": [ "crowdblock" ]
+		},
+		"write": {
+			"file": {
+				"/usr/sbin/crowdblock sync": [ "exec" ],
+				"/usr/sbin/crowdblock pause *": [ "exec" ],
+				"/usr/sbin/crowdblock resume *": [ "exec" ]
+			},
+			"uci": [ "crowdblock" ]
+		}
+	}
+}

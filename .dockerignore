@@ -1,0 +1,9 @@
+# Only go.mod, go.sum and server/ are needed (see server/Dockerfile).
+*
+!go.mod
+!go.sum
+!server/
+server/geoip/
+server/crowdblock-server
+server/scripts/
+**/*_test.go
