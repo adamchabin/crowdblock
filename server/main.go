@@ -84,7 +84,7 @@ func main() {
 	}
 	defer rdb.Close()
 
-	openGeoIP()
+	openGeoIP("/path/to/geoip/database.mmdb")
 
 	if missing := smtpMissing(); len(missing) > 0 {
 		log.Printf("warning: registration by e-mail disabled, not set: %s", strings.Join(missing, ", "))
@@ -792,7 +792,7 @@ func queryIPList(ctx context.Context, minutes, minReporters int) ([]ipListEntry,
 		if err := rows.Scan(&e.IP, &e.DistinctReporters, &e.Sources); err != nil {
 			return nil, err
 		}
-		e.Country = countryOf(e.IP)
+		e.Country = countryOf(netip.MustParseAddr(e.IP), geoDB)
 		result = append(result, e)
 	}
 	return result, rows.Err()

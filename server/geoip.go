@@ -1,5 +1,10 @@
 package main
 
+import (
+	"log"
+	"net/netip"
+)
+
 // GeoDBReader definiuje interfejs potrzebny do wyszukiwania adresów IP,
 // co umożliwia testowanie (mockowanie) w modułach biznesowych.
 type GeoDBReader interface {
@@ -16,12 +21,12 @@ func openGeoIP(dbPath string) error {
 	// Tutaj w prawdziwej implementacji stanie się ładowanie pliku .mmdb do geoDB.
 	// Na potrzeby tej demonstracji, zakładamy, że to miejsce będzie mockowane,
 	// ale musimy wypełnić funkcję, aby nasz kod skompilował się poprawnie.
-	
+
 	// W praktyce:
 	// db, err := maxminddb.Open(dbPath)
 	// if err != nil { return err }
 	// geoDB = &RealGeoDBReader{db: db}
-	
+
 	// Dla celów testowych:
 	geoDB = &MockGeoDBReader{}
 	return nil
@@ -36,23 +41,24 @@ func countryOf(addr netip.Addr, reader GeoDBReader) string {
 		log.Printf("ERROR: GeoIP lookup failed: %v", err)
 		return ""
 	}
-	
+
 	// 2. Logika krajów
 	// Zamiast przechodzenia po skomplikowanym try-catch, polegamy na mapie.
-	return countryNameMap[isoCode]
+	return countryMap[isoCode]
 }
 
 // Globalna mapa krajów
-var countryNameMap = map[string]string{
+var countryMap = map[string]string{
 	"AF": "Afghanistan",
 	"AD": "Andorra",
 	"AE": "United Arab Emirates",
 	// [...] lista wszystkich krajów
 	"GB": "United Kingdom",
+	"US": "United States",
 	"SG": "Singapore",
 	"PL": "Poland",
 	// Dodaj fallback dla adresów nieznanych
-	"ZZ": "Unknown", 
+	"ZZ": "Unknown",
 	// ... inne kraje
 }
 
@@ -75,13 +81,13 @@ func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, error) {
 		return "SG", nil // Singapore
 	}
 	// Dla każdego innego IP, w tym adresów np. 36.75.4.115, zwracamy "ZZ".
-	return "ZZ", nil 
+	return "ZZ", nil
 }
 
 // --- Funkcja CountryNameMap - dla kompletności i testowalności ---
 // Zostawmy to jako miejsce, gdzie będzie zaimplementowana pełna logika mapowania.
-func countryNameMap(isoCode string) string {
-	if name, ok := countryNameMap[isoCode]; ok {
+func getCountryName(isoCode string) string {
+	if name, ok := countryMap[isoCode]; ok {
 		return name
 	}
 	return ""
