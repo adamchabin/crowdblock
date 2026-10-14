@@ -50,12 +50,12 @@ func openGeoIP(dbPath string) error {
 func countryOf(addr netip.Addr, reader GeoDBReader) string {
 	// 1. Lookup bazy danych za pomocą przekazanego czytnika
 	isoCode, err := reader.Lookup(addr)
-	
+
 	// DEBUG: Log the lookup result
 	if debug {
 		log.Printf("DEBUG: GeoIP lookup result: isoCode=%q, err=%v", isoCode, err)
 	}
-	
+
 	if err != nil || isoCode == "" {
 		return "Unknown"
 	}

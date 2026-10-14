@@ -13,8 +13,8 @@ WORKDIR /src
 COPY server/go.mod server/go.sum ./
 RUN go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
 
-# Copy server source code
-COPY server/*.go ./
+# Copy server source code and embedded assets (see go:embed in migrate.go, stats.go)
+COPY server/*.go server/*.sql server/*.html ./
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server .
 

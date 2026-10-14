@@ -8,6 +8,24 @@ import (
 // Testy jednostkowe skupiają się na logice wywołania, a nie na faktycznym piśmiennictwie bazy danych,
 // dzięki użyciu MockGeoDBReader.
 
+// MockGeoDBReader is a test fake of GeoDBReader with canned ISO codes
+// matching the addresses used in the tests below.
+type MockGeoDBReader struct{}
+
+// Lookup returns a canned ISO code for known test addresses and "" for the rest.
+func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, error) {
+	switch addr.String() {
+	case "192.0.2.1":
+		return "US", nil
+	case "88.99.10.10":
+		return "PL", nil
+	case "203.0.113.42":
+		return "SG", nil
+	default:
+		return "", nil
+	}
+}
+
 func TestCountryOf_Success(t *testing.T) {
 	// Case 1: USA (znany adres)
 	mockReader := &MockGeoDBReader{}
