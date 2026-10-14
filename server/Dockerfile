@@ -11,11 +11,16 @@ ARG VERSION=dev
 WORKDIR /src
 # Copy server module files first for proper dependency resolution
 COPY server/go.mod server/go.sum ./
-RUN go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
+# Go module + build caches persist across CI builds via the buildx GHA
+# cache backend (cache-to: type=gha,mode=max); without them every build
+# recompiles the stdlib and all dependencies from scratch.
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
 
 # Copy server source code and embedded assets (see go:embed in migrate.go, stats.go)
 COPY server/*.go server/*.sql server/*.html ./
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server .
 
 # Country database, current at build time (DB-IP Lite, CC BY 4.0, updated
