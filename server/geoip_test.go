@@ -8,21 +8,21 @@ import (
 // Testy jednostkowe skupiają się na logice wywołania, a nie na faktycznym piśmiennictwie bazy danych,
 // dzięki użyciu MockGeoDBReader.
 
-// MockGeoDBReader is a test fake of GeoDBReader with canned ISO codes
+// MockGeoDBReader is a test fake of GeoDBReader with canned ISO codes and names
 // matching the addresses used in the tests below.
 type MockGeoDBReader struct{}
 
-// Lookup returns a canned ISO code for known test addresses and "" for the rest.
-func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, error) {
+// Lookup returns a canned (ISO code, name) for known test addresses and ("", "") for the rest.
+func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, string, error) {
 	switch addr.String() {
 	case "192.0.2.1":
-		return "US", nil
+		return "US", "United States", nil
 	case "88.99.10.10":
-		return "PL", nil
+		return "PL", "Poland", nil
 	case "203.0.113.42":
-		return "SG", nil
+		return "SG", "Singapore", nil
 	default:
-		return "", nil
+		return "", "", nil
 	}
 }
 
@@ -30,23 +30,23 @@ func TestCountryOf_Success(t *testing.T) {
 	// Case 1: USA (znany adres)
 	mockReader := &MockGeoDBReader{}
 	addrUS, _ := netip.ParseAddr("192.0.2.1")
-	country := countryOf(addrUS, mockReader)
-	if country != "United States" {
-		t.Errorf("Oczekiwano 'United States', otrzymano '%s'", country)
+	code, name := countryOf(addrUS, mockReader)
+	if code != "US" || name != "United States" {
+		t.Errorf("Oczekiwano ('US', 'United States'), otrzymano ('%s', '%s')", code, name)
 	}
 
 	// Case 2: Polska (znany adres)
 	addrPL, _ := netip.ParseAddr("88.99.10.10")
-	country = countryOf(addrPL, mockReader)
-	if country != "Poland" {
-		t.Errorf("Oczekiwano 'Poland', otrzymano '%s'", country)
+	code, name = countryOf(addrPL, mockReader)
+	if code != "PL" || name != "Poland" {
+		t.Errorf("Oczekiwano ('PL', 'Poland'), otrzymano ('%s', '%s')", code, name)
 	}
 
 	// Case 3: Singapur (znany adres)
 	addrSG, _ := netip.ParseAddr("203.0.113.42")
-	country = countryOf(addrSG, mockReader)
-	if country != "Singapore" {
-		t.Errorf("Oczekiwano 'Singapore', otrzymano '%s'", country)
+	code, name = countryOf(addrSG, mockReader)
+	if code != "SG" || name != "Singapore" {
+		t.Errorf("Oczekiwano ('SG', 'Singapore'), otrzymano ('%s', '%s')", code, name)
 	}
 }
 
@@ -55,9 +55,9 @@ func TestCountryOf_FailureHandling(t *testing.T) {
 
 	// Case 1: Nieznany IP (mock zwróci pusty kod)
 	addrUnknown, _ := netip.ParseAddr("99.99.99.99")
-	country := countryOf(addrUnknown, mockReader)
-	if country != "Unknown" {
-		t.Errorf("Oczekiwano pustego stringa dla nieznanego IP, otrzymano: '%s'", country)
+	code, name := countryOf(addrUnknown, mockReader)
+	if code != "Unknown" || name != "Unknown" {
+		t.Errorf("Oczekiwano ('Unknown', 'Unknown') dla nieznanego IP, otrzymano: ('%s', '%s')", code, name)
 	}
 }
 

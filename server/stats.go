@@ -94,8 +94,9 @@ func computeCacheStats(ctx context.Context) cacheStats {
 }
 
 type countryCount struct {
-	Country string `json:"country"`
-	IPs     int    `json:"ips"`
+	Country     string `json:"country"`
+	CountryName string `json:"country_name,omitempty"`
+	IPs         int    `json:"ips"`
 }
 
 const statsTTL = time.Minute
@@ -185,13 +186,17 @@ func computeStats(ctx context.Context) (*statsResponse, error) {
 		return nil, err
 	}
 	byCountry := map[string]int{}
+	names := map[string]string{}
 	for _, e := range ips {
 		if e.Country != "" {
 			byCountry[e.Country]++
+			if _, ok := names[e.Country]; !ok {
+				names[e.Country] = e.CountryName
+			}
 		}
 	}
 	for c, n := range byCountry {
-		s.Countries = append(s.Countries, countryCount{c, n})
+		s.Countries = append(s.Countries, countryCount{Country: c, CountryName: names[c], IPs: n})
 	}
 	sort.Slice(s.Countries, func(i, j int) bool {
 		if s.Countries[i].IPs != s.Countries[j].IPs {

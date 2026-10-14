@@ -703,8 +703,9 @@ func maybeBlacklist(ctx context.Context, ip, userID string) (bool, error) {
 type ipListEntry struct {
 	IP                string   `json:"ip"`
 	DistinctReporters int      `json:"distinct_reporters"`
-	Country           string   `json:"country,omitempty"` // ISO 3166-1 alpha-2, e.g. "CN"
-	Sources           []string `json:"sources,omitempty"` // e.g. ["auth", "fail2ban"], from the report window
+	Country           string   `json:"country,omitempty"`      // ISO 3166-1 alpha-2, e.g. "CN"
+	CountryName       string   `json:"country_name,omitempty"` // English name, e.g. "China"
+	Sources           []string `json:"sources,omitempty"`      // e.g. ["auth", "fail2ban"], from the report window
 }
 
 // The list is served for fixed thresholds only, so that the server can
@@ -791,14 +792,14 @@ func handleGeoIP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("DEBUG: GeoIP query received for IP %s from %s", ipStr, r.RemoteAddr)
 	}
 
-	country := countryOf(addr, geoDB)
+	code, name := countryOf(addr, geoDB)
 
 	// DEBUG: Log the ISO code result
 	if debug {
-		log.Printf("DEBUG: ISO code %q looked up for IP %s", country, ipStr)
+		log.Printf("DEBUG: ISO code %q (%q) looked up for IP %s", code, name, ipStr)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"ip": addr.String(), "country": country})
+	writeJSON(w, http.StatusOK, map[string]string{"ip": addr.String(), "country": code, "country_name": name})
 }
 
 // queryIPList returns the addresses reported by at least minReporters
@@ -825,7 +826,7 @@ func queryIPList(ctx context.Context, minutes, minReporters int) ([]ipListEntry,
 		if err := rows.Scan(&e.IP, &e.DistinctReporters, &e.Sources); err != nil {
 			return nil, err
 		}
-		e.Country = countryOf(netip.MustParseAddr(e.IP), geoDB)
+		e.Country, e.CountryName = countryOf(netip.MustParseAddr(e.IP), geoDB)
 		result = append(result, e)
 	}
 	return result, rows.Err()
