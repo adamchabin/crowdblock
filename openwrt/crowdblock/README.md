@@ -87,7 +87,8 @@ X-API-Key: api_key                               # Preferred method (header-base
 ```json
 [
   {"ip":"198.51.100.23","distinct_reporters":17,"country":"CN","sources":["auth","fail2ban"]},
-  {"ip":"2001:db8::1","distinct_reporters":6}
+  {"ip":"2001:db8::1","distinct_reporters":6},
+  {"ip":"192.168.0.0/16","distinct_reporters":10}
 ]
 ```
 
@@ -159,7 +160,7 @@ uci set crowdblock.main.enabled='1'
 uci commit crowdblock
 
 # Enable and start service
-/etc/init.d/crowdblock enable
+/etc.init.d/crowdblock enable
 /etc.init.d/crowdblock start
 ```
 
