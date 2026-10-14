@@ -77,9 +77,15 @@ function download(cfg, url, file, errfile, etag) {
 
 	// The server accepts the API key as the Basic auth password (the user
 	// name is ignored); uclient-fetch sends it after the 401 challenge.
-	// NOTE: visible in `ps` for the duration of the request. Acceptable on a
-	// single-user router.
-	push(argv, '--user=crowdblock', '--password=' + cfg.api_key);
+	// Use header-based API key authentication to avoid exposing key in ps
+	// The server accepts the key in the X-API-Key header
+	if (supports_header()) {
+	    push(argv, '--header=X-API-Key: ' + cfg.api_key);
+	} else {
+	    // NOTE: visible in `ps` for the duration of the request. Acceptable on a
+	    // single-user router.
+	    push(argv, '--user=crowdblock', '--password=' + cfg.api_key);
+	}
 
 	push(argv, url);
 

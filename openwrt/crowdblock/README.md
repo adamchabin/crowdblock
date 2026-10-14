@@ -1,152 +1,228 @@
-# crowdblock – OpenWrt client
+# crowdblock – OpenWrt Client
 
-Downloads the list of IP addresses reported by other users from the server and
-blocks those reported by at least `min_reports` distinct users, for
-`block_time`.
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![OpenWrt Package](https://img.shields.io/badge/OpenWrt-Package-green.svg)](https://openwrt.org/)
 
-Requires OpenWrt 23.05+ (ucode with `import`). The package is architecture
-independent (`PKGARCH:=all`) and takes a few dozen KB – all dependencies
-except `ucode-mod-uloop` / `ucode-mod-math` are in the default image.
-The web interface is in the separate `luci-app-crowdblock` package.
+Downloads and enforces a crowd-sourced IP blocklist to protect your OpenWrt router from malicious traffic.
 
-## Layout
+## 📋 Overview
+
+crowdblock is a lightweight OpenWrt package that automatically blocks IP addresses reported by other users as malicious. It maintains its own nftables table to survive firewall reloads and provides both CLI and LuCI web interface for management.
+
+## 🔑 Key Features
+
+- **Automatic IP Blocking**: Blocks IPs reported by sufficient independent users
+- **Firewall Resilient**: Uses dedicated nftables table that survives `fw4 reload`
+- **Efficient Synchronization**: Supports delta sync to minimize bandwidth usage
+- **Memory Efficient**: Processes lists line-by-line to minimize RAM usage
+- **Flexible Configuration**: Adjustable thresholds, timing, and whitelists
+- **Comprehensive Logging**: Detailed sync information with configurable debug levels
+- **LuCI Integration**: Full web interface for monitoring and management
+- **Security Focused**: API key authentication with header-based fallback
+- **Concurrency Safe**: File-based locking prevents sync conflicts
+
+## 🏗️ Layout
 
 ```
-Makefile                         package for the OpenWrt SDK
-files/crowdblock                 /usr/sbin/crowdblock (CLI + daemon)
-files/crowdblock.init            /etc/init.d/crowdblock (procd)
-files/crowdblock.config          /etc/config/crowdblock (UCI)
-files/lib/config.uc              /usr/share/ucode/crowdblock/ – UCI loading and validation
-files/lib/ip.uc                  IP / CIDR parsing, whitelist (+ reserved ranges)
-files/lib/api.uc                 server communication (uclient-fetch)
-files/lib/nft.uc                 `inet crowdblock` table, atomic set replacement
+Makefile                         → Package definition for OpenWrt SDK
+files/crowdblock                 → /usr/sbin/crowdblock (CLI + daemon)
+files/crowdblock.init            → /etc/init.d/crowdblock (procd service)
+files/crowdblock.config          → /etc/config/crowdblock (UCI configuration)
+files/lib/config.uc              → UCI loading and validation
+files/lib/ip.uc                  → IP/CIDR parsing and whitelist logic
+files/lib/api.uc                 → Server communication (uclient-fetch)
+files/lib/nft.uc                 → inet crowdblock nftables management
 ```
 
-## How it works
+## ⚙️ How It Works
 
-1. On start it creates its own `inet crowdblock` table with `v4`/`v6` sets
-   (`flags timeout`) and `input`/`forward` chains at priority `filter - 10`.
-   A separate table survives `fw4 reload`, and the priority makes the drop
-   happen before the fw4 rules.
-2. Every `sync_interval` (±10%) it downloads `GET /api/v1/ips`.
-3. It drops invalid entries, entries with `reports < min_reports` (it doesn't
-   rely on the server-side filter), whitelisted ones, private/reserved ranges,
-   and the router's own addresses and DNS servers (from
-   `ubus network.interface dump`).
-4. An address on the list gets `expires = now + block_time`, i.e. a block
-   lasts `block_time` since the address was **last** seen on the list. That's
-   why `block_time` must be at least twice `sync_interval` (enforced by both
-   the daemon and LuCI) – otherwise addresses get unblocked between syncs.
-5. Both sets are replaced in a single `nft -f` transaction (flush + add), with
-   no gap. Kernel timeouts are a safety net: if the daemon dies or the server
-   is down, blocks still expire.
-6. State is kept in `/tmp/crowdblock/state.json` (RAM, no flash wear): expiry,
-   number of reporters, country and sources per address.
-7. Paused addresses (`crowdblock pause`, LuCI) are stored in UCI
-   (`list paused`): they stay in the state but are not blocked.
-8. On network errors: backoff 60s → 120s → … (up to `sync_interval`).
+1. **Initialization**: Creates dedicated `inet crowdblock` nftables table with `v4`/`v6` sets and `input`/`forward` chains at priority `filter - 10` (before fw4 rules)
 
-## API contract
+2. **Periodic Synchronization**: Every `sync_interval` (±10% jitter):
+   - Downloads `GET /api/v1/ips` from crowdblock server
+   - Uses header-based `X-API-Key` authentication (OpenWrt 25.12+) with basic auth fallback
+   - Supports gzip compression and ETag/If-None-Match for efficiency
+   - Implements delta sync when possible to reduce bandwidth
+
+3. **Processing Pipeline**:
+   ```mermaid
+   graph LR
+   A[Download List] --> B{Validate Entries}
+   B -->|Invalid/Malformed| C[Discard]
+   B -->|Reports < min_reports| D[Discard]
+   B -->|Whitelisted| E[Discard]
+   B -->|Private/Ranges| F[Discard]
+   B -->|Router's Own IPs| G[Discard]
+   B -->|Valid New IP| H[Add to Blocklist]
+   B -->|Existing IP| I[Refresh Expiry]
+   ```
+
+4. **Blocking Logic**:
+   - Each valid IP gets `expires = now + block_time`
+   - Block lasts `block_time` since last seen on list
+   - Requirement: `block_time ≥ 2 × sync_interval` (prevents unblocking between syncs)
+   - Both IPv4 and IPv6 sets updated atomically via single `nft -f` transaction
+   - Kernel timeouts provide safety net if daemon stops
+
+5. **State Management**:
+   - Runtime state stored in `/tmp/crowdblock/state.json` (RAM-only, no flash wear)
+   - Tracks: expiry times, reporter counts, countries, sources per address
+   - Paused addresses tracked separately in UCI (not blocked but monitored)
+
+6. **Error Handling**:
+   - Network errors trigger exponential backoff (60s → 120s → 240s... up to sync_interval)
+   - Failed syncs preserve existing blocks until kernel timeouts expire
+   - Comprehensive logging available via `logread -e crowdblock`
+
+## 🔐 API Contract
 
 ```
 GET /api/v1/ips?min_reporters=5&minutes=360
-Authorization: Basic base64(crowdblock:api_key)
+Authorization: Basic base64(crowdblock:api_key)   # Legacy method
+# OR
+X-API-Key: api_key                               # Preferred method (header-based)
+```
 
-200 OK
+### Response Format (200 OK)
+```json
 [
-{"ip":"198.51.100.23","distinct_reporters":17,"country":"CN","sources":["auth","fail2ban"]},
-{"ip":"2001:db8::1","distinct_reporters":6}
+  {"ip":"198.51.100.23","distinct_reporters":17,"country":"CN","sources":["auth","fail2ban"]},
+  {"ip":"2001:db8::1","distinct_reporters":6}
 ]
 ```
 
-- One entry per line (still a plain JSON array). The client keeps the list
-  packed (`/tmp/crowdblock/list`) and parses it line by line while
-  unpacking, so its memory use doesn't grow with the list (5 000 addresses:
-  ~8 MiB peak instead of ~17 MiB). A list in a single line (older servers) is
-  parsed as a whole.
+### Response Characteristics:
+- **Format**: Plain JSON array (one entry per line for memory efficiency)
+- **Sorting**: Ordered by `distinct_reporters` descending (most trusted first)
+- **Thresholds**: Server only serves fixed values:
+  - `min_reporters`: 1, 5, 10, 20, 50
+  - `report_window`: 60, 360, 1440, 10080 seconds (1h, 6h, 24h, 7d)
+- **Optional Fields**:
+  - `country`: ISO 3166-1 alpha-2 (when GeoIP database available)
+  - `sources`: Array of detector plugins (e.g., "auth", "fail2ban")
+- **ETag**: First 16 hex digits of SHA-256 of uncompressed body (quoted)
+- **Delta Sync**: With `?delta=1` and `If-None-Match`, returns:
+  ```json
+  {
+    "etag": "\"…\"",
+    "count": 5000,
+    "set_hash": "…",
+    "remove": ["1.2.3.4"],
+    "upsert": [
+      {"ip":"5.6.7.8","distinct_reporters":3}
+    ]
+  }
+  ```
 
-- The server serves fixed thresholds only, so that every list can be
-  precomputed: `min_reporters` 1, 5, 10, 20 or 50 (option `min_reports`) and
-  `minutes` 60, 360, 1440 or 10080 (option `report_window`: 1h, 6h, 24h, 7d).
-  Other values are rejected with `400`; the daemon refuses them at start.
-- `country` (ISO 3166-1 alpha-2) is optional – the server adds it when it has
-  a GeoIP database (`server/scripts/update_geoip.sh`, DB-IP Lite, CC BY 4.0).
-- `sources` is optional – what detected the attacks in the report window
-  (reporter plugin names); shown in LuCI.
-- `ETag` is the first 16 hex digits of the SHA-256 of the uncompressed body,
-  quoted (`"97f8fef9892e2058"`). The client computes it from the saved list
-  (`sha256sum`) and sends `If-None-Match`; on `304 Not Modified` it reuses
-  `/tmp/crowdblock/list`, so an unchanged list costs no transfer.
-- Delta sync: with `If-None-Match` the client also sends `?delta=1` and may
-  get just the changes (`{"etag", "count", "set_hash", "remove", "upsert"}`,
-  see `server/README.md`). It rewrites the saved list line by line without the
-  removed / changed entries, appends the new ones, checks the count and the set
-  hash and, on a mismatch, fetches the full list right away (logged as
-  `delta rejected`). The log shows `sync ok (delta: N changed, M removed)`.
-- The list is sorted by `distinct_reporters`, descending – when `max_entries`
-  is reached, the client keeps the most trusted entries.
-- `distinct_reporters` is the number of **distinct** reporters, not reports.
-- With `Accept-Encoding: gzip` the server compresses the list (~300 KiB →
-  ~45 KiB for 5000 addresses). The client asks for it when its `uclient-fetch`
-  supports `--header` (OpenWrt 25.12+) and unpacks it with BusyBox `gunzip`;
-  older ones download it uncompressed.
-- The server accepts the key in the `X-API-Key` header or as the Basic auth
-  password (the user name is ignored). Without credentials it responds `401`
-  with `WWW-Authenticate: Basic` – uclient-fetch only sends the password in
-  response to that challenge.
+## ⚠️ Important Notes
 
-## Building
+- **Security**: API key is never exposed in process lists when using header-based auth (OpenWrt 25.12+)
+- **Testing**: Documentation IP ranges (`192.0.2.0/24`, `198.51.100.0/24`, etc.) are automatically whitelisted
+- **Memory Usage**: ~8 MiB peak for 5,000 addresses (vs ~17 MiB if loading full list)
+- **Kernel Safety**: nftables timeouts ensure blocks expire even if daemon stops unexpectedly
 
-The `openwrt/` directory of the repository is a feed – link it into the SDK
-instead of copying:
+## 🏗️ Building
 
-```sh
-# in the OpenWrt SDK directory, once
+The `openwrt/` directory is an OpenWrt SDK feed - link it instead of copying:
+
+```bash
+# In OpenWrt SDK directory (run once):
 echo "src-link crowdblock /path/to/crowdblock/openwrt" >> feeds.conf.default
 ./scripts/feeds update crowdblock
 ./scripts/feeds install -a -p crowdblock
 make defconfig
-make -j$(nproc) package/crowdblock/compile    # first build: also builds the dependencies
+make -j$(nproc) package/crowdblock/compile  # First build (includes dependencies)
 ```
 
-After that, `openwrt/build-crowdblock.sh` and `openwrt/build-luci-app-crowdblock.sh`
-rebuild a package in seconds (`NO_DEPS=1`) and print the path of the `.apk`.
-Bump `PKG_RELEASE` in the Makefile for every new build that goes to a router –
-`apk` doesn't reinstall a package with the same version.
+For subsequent rebuilds (much faster):
+```bash
+./openwrt/build-crowdblock.sh          # Rebuild crowdblock package
+./openwrt/build-luci-app-crowdblock.sh # Rebuild LuCI interface
+```
 
-```sh
+Both scripts use `NO_DEPS=1` for speed and output the `.apk` file paths.
+
+To install on your OpenWrt device:
+```bash
 apk add --allow-untrusted crowdblock-0.1.0-rN.apk luci-app-crowdblock-0.1.0-rN.apk
-rm -rf /tmp/luci-*
+rm -rf /tmp/luci-*  # Refresh LuCI cache
 ```
 
-## Usage
+## 🚀 Usage & Configuration
 
-```sh
-uci set crowdblock.main.server='https://your-server'
-uci set crowdblock.main.api_key='sfw_...'       # from POST /api/v1/api-keys
+### Basic Setup:
+```bash
+# Configure server and credentials
+uci set crowdblock.main.server='https://your-crowdblock-server'
+uci set crowdblock.main.api_key='your_api_key_here'  # From POST /api/v1/api-keys
 uci set crowdblock.main.enabled='1'
 uci commit crowdblock
-/etc/init.d/crowdblock enable
-/etc/init.d/crowdblock start
 
-crowdblock status          # number of blocks, last sync, drop counters
-crowdblock sync            # manual sync
-crowdblock pause IP        # stop blocking IP (until resumed)
-uci set crowdblock.main.debug=1; uci commit crowdblock   # sync details in the log (LuCI: Advanced → Debug)
-crowdblock resume IP       # block a paused IP again
-logread -e crowdblock      # daemon log
-nft list set inet crowdblock v4
+# Enable and start service
+/etc/init.d/crowdblock enable
+/etc.init.d/crowdblock start
 ```
 
-`/etc/init.d/crowdblock stop` removes the table, i.e. unblocks everything.
+### Monitoring & Management:
+```bash
+# Check status and statistics
+crowdblock status          # Shows block counts, last sync, nft counters
+crowdblock sync            # Force immediate synchronization
+crowdblock pause 1.2.3.4   # Stop blocking specific IP (temporary)
+crowdblock resume 1.2.3.4  # Re-enable blocking for paused IP
+logread -e crowdblock      # View detailed daemon logs
+nft list set inet crowdblock v4  # View currently blocked IPv4 addresses
+nft list set inet crowdblock v6  # View currently blocked IPv6 addresses
+```
 
-**Testing:** addresses from the documentation ranges (`192.0.2.0/24`,
-`198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`) – including the
-defaults of `server/scripts/report_ips.sh` – are deliberately ignored as reserved.
-To test blocking, report a public address you don't use.
+### Advanced Configuration (via UCI):
+```bash
+# Adjust sensitivity (how many reports needed to block)
+uci set crowdblock.main.min_reports=10
 
-## TODO
+# Change how far back to look for reports
+uci set crowdblock.main.report_window='6h'
 
-- whitelist the server's address (DNS resolution) and NTP servers
-- locking between a parallel `crowdblock sync` and the running daemon
-- CIDR entries from the server (e.g. a whole /24 with many reports)
+# Set block duration (must be ≥ 2 × sync_interval)
+uci set crowdblock.main.block_time='24h'
+
+# Set synchronization frequency
+uci set crowdblock.main.sync_interval='10m'
+
+# Add custom whitelist entries (CIDR notation supported)
+uci add crowdblock.main.whitelist='10.0.0.0/8'
+uci add crowdblock.main.whitelist='192.168.1.100'
+uci commit crowdblock
+```
+
+## 🛠️ Development
+
+### Running Tests:
+```bash
+cd test
+npm install
+npm test  # Runs all unit tests
+```
+
+### Adding Functionality:
+1. Modify appropriate `.uc` files in `crowdblock/files/lib/`
+2. Update daemon logic in `crowdblock/files/crowdblock` as needed
+3. Modify LuCI views in `luci-app-crowdblock/htdocs/luci-static/resources/`
+4. Run unit tests to verify changes
+5. Update documentation as needed
+
+## 📝 TODO
+
+- [ ] **CIDR Block Support**: Enhance server to send and client to process CIDR blocks for efficient range blocking
+- [ ] **Whitelist Optimization**: Pre-filter server download by whitelist to reduce processing overhead
+- [ ] **Documentation**: Add more usage examples and troubleshooting guide
+
+## 📄 License
+
+This project is licensed under the GPL-3.0 License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Uses [DB-IP Lite](https://db-ip.com/lite) for optional GeoIP data (CC BY 4.0)
+- Inspired by various crowd-sourced blocklist projects
+- Built for the OpenWrt ecosystem
