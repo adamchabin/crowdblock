@@ -137,9 +137,12 @@ func listRefreshInterval() time.Duration {
 }
 
 // runListGenerator regenerates all lists every interval until ctx is done.
-func runListGenerator(ctx context.Context, interval time.Duration) {
+func runListGenerator(ctx context.Context, interval time.Duration) error {
 	instance := fmt.Sprintf("%s:%d", hostname(), os.Getpid())
 	failing := false
+
+	t := time.NewTimer(interval)
+	defer t.Stop()
 
 	for {
 		start := time.Now()
@@ -156,8 +159,9 @@ func runListGenerator(ctx context.Context, interval time.Duration) {
 
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(interval):
+			return ctx.Err()
+		case <-t.C:
+			t.Reset(interval)
 		}
 	}
 }

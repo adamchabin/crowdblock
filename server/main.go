@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"log/slog"
@@ -20,10 +21,12 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/signal"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -112,7 +115,18 @@ func main() {
 		slog.Info("registration by e-mail enabled", "host", os.Getenv("SMTP_HOST"))
 	}
 
-	go runListGenerator(ctx, listRefreshInterval())
+	// Startup timeout for initialization
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if err := rdb.Ping(startupCtx).Err(); err != nil {
+		slog.Warn("redis unavailable, API key auth will hit postgres", "addr", redisAddr, "err", err)
+	}
+	startupCancel()
+
+	// Main context with signal handling
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	g, ctx := errgroup.WithContext(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleUI)
@@ -130,17 +144,33 @@ func main() {
 	if addr == "" {
 		addr = ":8080"
 	}
-	slog.Info("server listening", "addr", addr)
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           logRequests(mux),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+
+	// List generator
+	g.Go(func() error {
+		return runListGenerator(ctx, listRefreshInterval())
+	})
+
+	// HTTP server
+	g.Go(func() error {
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           logRequests(mux),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		slog.Info("server listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})
+
+	// Wait for shutdown
+	if err := g.Wait(); err != nil {
+		slog.Error("shutdown error", "err", err)
 	}
-	slog.Error("server failed", "err", srv.ListenAndServe())
-	os.Exit(1)
 }
 
 // logRequests logs every incoming HTTP request to the console: method, path,
@@ -339,14 +369,15 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 		// Sent in the background so the response time doesn't depend on SMTP.
 		// If the mail can't be sent the account is removed again, so the user
 		// can register again instead of owning a password nobody received.
-		go func() {
+		go func(ctx context.Context, userID, email, password, mailKey string) {
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
 			if err := sendPasswordMail(email, password); err != nil {
 				slog.Warn("registration mail failed", "email", email, "err", err)
-				bg := context.Background()
-				_, _ = db.Exec(bg, `DELETE FROM users WHERE id = $1`, userID)
-				rdb.Del(bg, mailKey)
+				_, _ = db.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
+				rdb.Del(ctx, mailKey)
 			}
-		}()
+		}(r.Context(), userID, email, password, mailKey)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"message": reply})
 }
