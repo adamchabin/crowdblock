@@ -213,7 +213,7 @@ npm test  # Runs all unit tests
 
 ## 📝 TODO
 
-- [ ] **CIDR Block Support**: Enhance server to send and client to process CIDR blocks for efficient range blocking
+- [x] **CIDR Block Support**: Enhanced server to send and client to process CIDR blocks for efficient range blocking (using nftables ipv4_prefix/ipv6_prefix sets)
 - [ ] **Whitelist Optimization**: Pre-filter server download by whitelist to reduce processing overhead
 - [ ] **Documentation**: Add more usage examples and troubleshooting guide
 
