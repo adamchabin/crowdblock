@@ -332,7 +332,7 @@
           ]);
           bars(
             $("countries"),
-            s.countries.map((c) => [c.country, c.ips]),
+            s.countries.map((c) => [c.country_name || c.country, c.ips]),
           );
           bars(
             $("sources"),
