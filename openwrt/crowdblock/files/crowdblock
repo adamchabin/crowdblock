@@ -1,4 +1,3 @@
-#!/usr/bin/ucode
 // crowdblock - crowd-sourced IP blocklist client for OpenWrt
 //
 //   crowdblock run       daemon (started by /etc/init.d/crowdblock)
@@ -14,7 +13,7 @@ import * as uloop from 'uloop';
 import { connect } from 'ubus';
 import { rand, srand } from 'math';
 
-import { load as load_config, load_paused, save_paused, debug, ms_since } from 'crowdblock.config';
+import { load as load_config, load_paused, save_paused, debug, info, warn_log, error_log, ms_since } from 'crowdblock.config';
 import { whitelist, whitelisted } from 'crowdblock.ip';
 import { fetch_blocklist, each_entry, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
@@ -103,7 +102,7 @@ function build_whitelist(cfg) {
 		for (let e in list)
 			push(entries, e);
 
-	return whitelist(entries, (e) => log('ignoring invalid whitelist entry: %s', e));
+	return whitelist(entries, (e) => info('ignoring invalid whitelist entry: %s', e));
 }
 
 // --- sync ---------------------------------------------------------------
@@ -233,7 +232,7 @@ function sync(cfg, st) {
 		// their kernel timeout runs out.
 		st.last_error = err;
 		save_state(st);
-		log('sync failed: %s', err);
+		error_log('sync failed: %s', err);
 		return false;
 	}
 
@@ -246,14 +245,14 @@ function sync(cfg, st) {
 	if (stats.error) {
 		st.last_error = stats.error;
 		save_state(st);
-		log('sync failed: %s', stats.error);
+		error_log('sync failed: %s', stats.error);
 		return false;
 	}
 
 	// `/etc/init.d/firewall stop|restart` (fw4 flush) deletes all nftables
 	// tables, ours included - recreate it instead of failing until restart.
 	if (!nft.exists()) {
-		log('nftables table missing (firewall restarted?), recreating it');
+		warn_log('nftables table missing (firewall restarted?), recreating it');
 		err = nft.setup(cfg);
 	}
 
@@ -280,7 +279,7 @@ function sync(cfg, st) {
 	save_state(st);
 
 	if (err) {
-		log('nft update failed: %s', err);
+		error_log('nft update failed: %s', err);
 		return false;
 	}
 
@@ -291,7 +290,7 @@ function sync(cfg, st) {
 		: res.delta_failed ? sprintf(' (full list, delta rejected: %s)', res.delta_failed)
 		: '';
 
-	log('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
+	info('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
 		how,
 		length(keys(st.entries)), stats.added, stats.refreshed,
 		stats.whitelisted, purged, stats.invalid,
@@ -317,9 +316,9 @@ function cmd_run(cfg) {
 	drop_expired(st, time());
 	err = nft.apply(st.entries, time(), load_paused());
 	if (err)
-		log('cannot restore previous blocks: %s', err);
+		error_log('cannot restore previous blocks: %s', err);
 
-	log('crowdblock %s started: server=%s min_reports=%d block_time=%ds interval=%ds',
+	info('crowdblock %s started: server=%s min_reports=%d block_time=%ds interval=%ds',
 		VERSION, cfg.server, cfg.min_reports, cfg.block_time, cfg.sync_interval);
 
 	srand(time());
@@ -408,12 +407,12 @@ function cmd_status() {
 		else
 			(index(ip, ':') >= 0) ? v6++ : v4++;
 
-	log('blocked:    %d IPv4, %d IPv6 (%d paused)', v4, v6, p);
-	log('last sync:  %s', st.last_sync ? sprintf('%ds ago', now - st.last_sync) : 'never');
-	log('last error: %s', st.last_error ?? '-');
+	info('blocked:    %d IPv4, %d IPv6 (%d paused)', v4, v6, p);
+	info('last sync:  %s', st.last_sync ? sprintf('%ds ago', now - st.last_sync) : 'never');
+	info('last error: %s', st.last_error ?? '-');
 
 	for (let line in nft.counters())
-		log('%s', line);
+		info('%s', line);
 }
 
 function usage() {

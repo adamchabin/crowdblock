@@ -87,14 +87,31 @@ function download(cfg, url, file, errfile, etag) {
 	if (rc == 0)
 		return {};
 
-	let status = match(read_file(errfile) ?? '', /HTTP error ([0-9]+)/);
+	let stderr_content = read_file(errfile) ?? '';
+	let status = match(stderr_content, /HTTP error ([0-9]+)/);
 
 	if (rc == UCLIENT_HTTP_ERROR && status?.[1] == '304')
 		return { not_modified: true };
 
-	return { error: status
-		? `server returned HTTP ${status[1]}`
-		: `HTTP request failed (uclient-fetch exit code ${rc})` };
+	// Provide more detailed error information
+	let error_msg;
+	if (status) {
+		error_msg = sprintf('server returned HTTP %s', status[1]);
+		// Include stderr content for more context if available
+		let stderr_trimmed = trim(stderr_content);
+		if (stderr_trimmed && stderr_trimmed != '') {
+			error_msg += sprintf(': %s', stderr_trimmed);
+		}
+	} else {
+		error_msg = sprintf('HTTP request failed (uclient-fetch exit code %d)', rc);
+		// Include stderr content for more context if available
+		let stderr_trimmed = trim(stderr_content);
+		if (stderr_trimmed && stderr_trimmed != '') {
+			error_msg += sprintf(': %s', stderr_trimmed);
+		}
+	}
+
+	return { error: error_msg };
 }
 
 // Shell command printing the unpacked content of `file` (gzip or plain).
@@ -247,7 +264,7 @@ function apply_delta(cfg, file, dir) {
 
 	if (type(d) != 'object' || type(d.etag) != 'string' || type(d.count) != 'int' ||
 	    type(d.set_hash) != 'string' || type(d.upsert) != 'array' || type(d.remove) != 'array')
-		return { error: 'invalid delta' };
+		return { error: sprintf('invalid delta: %s', e.message || 'unknown error') };
 
 	let drop = {};
 	for (let ip in d.remove)
@@ -261,7 +278,7 @@ function apply_delta(cfg, file, dir) {
 	let plain = dir + '/list.new';
 	let out = open(plain, 'w');
 	if (!out)
-		return { error: 'cannot write ' + plain };
+		return { error: sprintf('cannot write %s', plain) };
 
 	let ips = [], first = true, base = 0;
 	let emit = function(line, ip) {
@@ -287,19 +304,21 @@ function apply_delta(cfg, file, dir) {
 	debug(cfg, 'delta: saved list %d entries, kept %d, %d new or changed, %d removed -> %d entries (server: %d), set hash %s (server: %s)',
 		base, kept, length(upsert), length(d.remove), length(ips), d.count, hash, d.set_hash);
 
-	if (!err && (length(ips) != d.count || hash != d.set_hash))
-		err = 'delta does not match the server list';
+	if (!err && (length(ips) != d.count || hash != d.set_hash)) {
+		return { error: sprintf('delta does not match the server list: got %d entries, hash %s; expected %d entries, hash %s',
+			length(ips), hash || 'null', d.count, d.set_hash) };
+	}
 
 	if (!err && system(sprintf('gzip -c %s > %s', shell_quote(plain), shell_quote(plain + '.gz'))) != 0)
-		err = 'cannot pack the list';
+		return { error: sprintf('cannot pack %s', plain) };
 
 	if (!err && !rename(plain + '.gz', LIST_FILE))
-		err = 'cannot write ' + LIST_FILE;
+		return { error: sprintf('cannot write %s', LIST_FILE) };
 
 	unlink(plain);
 	unlink(plain + '.gz');
 
-	return err ? { error: err } : { etag: d.etag, upserted: length(upsert), removed: length(d.remove) };
+	return err ? { error: err } : { etag: d.etag, upserted: length(upserted), removed: length(d.remove) };
 }
 
 // Downloads the list into LIST_FILE. Returns { etag }, { etag, delta } (a
