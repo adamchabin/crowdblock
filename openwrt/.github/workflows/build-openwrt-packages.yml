@@ -8,6 +8,7 @@ on:
       - 'luci-app-crowdblock/**'
       - 'build-crowdblock.sh'
       - 'build-luci-app-crowdblock.sh'
+      - '.github/workflows/build-openwrt-packages.yml'
   pull_request:
     branches: [ main, dev ]
     paths:
@@ -15,6 +16,7 @@ on:
       - 'luci-app-crowdblock/**'
       - 'build-crowdblock.sh'
       - 'build-luci-app-crowdblock.sh'
+      - '.github/workflows/build-openwrt-packages.yml'
 
 jobs:
   build:
