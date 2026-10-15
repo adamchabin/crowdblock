@@ -281,13 +281,28 @@ function purge_whitelisted(st, wl) {
 	let n = 0;
 
 	for (let ip in keys(st.entries)) {
-		if (whitelisted(wl, iptoarr(ip))) {
+		let bytes = iptoarr(ip);
+		let is_whitelisted = false;
+		
+		if (bytes) {
+			// Single IP
+			is_whitelisted = whitelisted(wl, bytes);
+		} else {
+			// CIDR - we check if the network address is whitelisted
+			let cidr = parse_cidr(ip);
+			if (cidr) {
+				is_whitelisted = whitelisted(wl, cidr.bytes);
+			}
+		}
+
+		if (is_whitelisted) {
 			forget(st, ip);
 			n++;
 		}
 	}
 
 	return n;
+}
 }
 
 // Returns true on success.
