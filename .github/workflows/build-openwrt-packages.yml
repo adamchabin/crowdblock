@@ -99,7 +99,7 @@ jobs:
       run: |
         cd "$SDK_DIR"
         echo 'CONFIG_PACKAGE_crowdblock=y' >> .config
-        make package/crowdblock/compile
+        make package/crowdblock/compile V=s
         find bin/packages -name "crowdblock-[0-9]*.apk" -exec realpath {} \;
 
     - name: Build luci-app-crowdblock package
@@ -108,7 +108,7 @@ jobs:
       run: |
         cd "$SDK_DIR"
         echo 'CONFIG_PACKAGE_luci-app-crowdblock=y' >> .config
-        make package/luci-app-crowdblock/compile
+        make package/luci-app-crowdblock/compile V=s
         find bin/packages -name "luci-app-crowdblock-[0-9]*.apk" -exec realpath {} \;
 
     - name: Generate package index (Packages.gz)
