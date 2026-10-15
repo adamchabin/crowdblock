@@ -47,11 +47,11 @@ func parseEmail(s string) (string, bool) {
 	return s, true
 }
 
-const passwordAlphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no look-alikes
+const passwordAlphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*" // no look-alikes, + specials
 
-// generatePassword returns 16 random characters (~93 bits).
+// generatePassword returns 20 random characters (~120 bits).
 func generatePassword() (string, error) {
-	b := make([]byte, 16)
+	b := make([]byte, 20)
 	for i := range b {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(passwordAlphabet))))
 		if err != nil {

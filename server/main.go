@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	maxAPIKeysPerUser  = 10
+	maxAPIKeysPerUser  = 20
 	blacklistWindow    = time.Hour
 	blacklistThreshold = 5
 	apiKeyCacheTTL     = 60 * time.Second

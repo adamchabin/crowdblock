@@ -58,7 +58,7 @@ func TestParseEmail(t *testing.T) {
 func TestGeneratePassword(t *testing.T) {
 	a, _ := generatePassword()
 	b, _ := generatePassword()
-	if len(a) != 16 || a == b {
+	if len(a) != 20 || a == b {
 		t.Errorf("bad passwords %q %q", a, b)
 	}
 }
