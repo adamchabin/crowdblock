@@ -83,13 +83,23 @@ jobs:
         ./scripts/feeds update crowdblock
         ./scripts/feeds install crowdblock luci-app-crowdblock -p crowdblock
 
+    - name: Generate .config (non-interactive)
+      run: |
+        cd "$SDK_DIR"
+        TERM=linux make defconfig
+        TERM=linux make olddefconfig
+
     - name: Build crowdblock package
+      env:
+        TERM: linux
       run: |
         cd "$SDK_DIR"
         make package/crowdblock/compile
         find bin/packages -name "crowdblock-[0-9]*.apk" -exec realpath {} \;
 
     - name: Build luci-app-crowdblock package
+      env:
+        TERM: linux
       run: |
         cd "$SDK_DIR"
         make package/luci-app-crowdblock/compile
