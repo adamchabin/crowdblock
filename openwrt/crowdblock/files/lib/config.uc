@@ -2,7 +2,7 @@
 'use strict';
 
 import { cursor } from 'uci';
-import { debug, info, warn_log, error_log, ms_since } from 'crowdblock.log';
+import { debug, info, warn_log, error_log, ms_since } from 'crowdblock.logging';
 
 // "90" -> 90, "30m" -> 1800, "24h" -> 86400, "7d" -> 604800
 function parse_duration(v) {
@@ -106,5 +106,6 @@ function save_paused(list) {
 		c.set('crowdblock', 'main', 'paused', list);
 	else
 		c.delete('crowdblock', 'main', 'paused');
+}
 
 export { parse_duration, load, load_paused, save_paused };
