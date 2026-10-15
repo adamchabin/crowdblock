@@ -1,3 +1,4 @@
+#!/usr/bin/ucode -s
 // crowdblock - crowd-sourced IP blocklist client for OpenWrt
 //
 //   crowdblock run       daemon (started by /etc/init.d/crowdblock)
