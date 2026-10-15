@@ -23,19 +23,21 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # OpenWrt SDK version and target
+      # NOTE: OpenWrt versions are YY.MM (e.g. 24.10). Verify OPENWRT_VERSION exists
+      # on https://downloads.openwrt.org/releases/ before changing.
       OPENWRT_VERSION: 25.12.5
       OPENWRT_TARGET: mediatek/filogic
       OPENWRT_GCC_VERSION: 14.3.0
-      
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: Set up dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y wget tar xz-utils gcc g++ make ncurses-dev libssl-dev rsync
-        
+
     - name: Cache OpenWrt SDK
       uses: actions/cache@v4
       with:
@@ -43,23 +45,24 @@ jobs:
         key: ${{ runner.os }}-openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ env.OPENWRT_TARGET }}-gcc${{ env.OPENWRT_GCC_VERSION }}
         restore-keys: |
           ${{ runner.os }}-openwrt-sdk-
-          
+
     - name: Download OpenWrt SDK
       if: steps.cache.outputs.cache-hit != 'true'
       run: |
         SDK_FILENAME="openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ env.OPENWRT_TARGET//\//- }}_gcc-${{ env.OPENWRT_GCC_VERSION }}_musl.Linux-x86_64.tar.xz"
         SDK_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/${{ env.OPENWRT_TARGET }}/${SDK_FILENAME}"
-        
+
         echo "Downloading OpenWrt SDK from $SDK_URL"
-        wget --quiet "$SDK_URL" -O sdk.tar.xz || {
-          echo "Failed to download SDK from $SDK_URL"
-          echo "HTTP status code: $(wget --server-response --spider "$SDK_URL" 2>&1 | grep 'HTTP/' | tail -1 | awk '{print $2}')"
+        HTTP_CODE=$(wget --server-response --spider "$SDK_URL" 2>&1 | grep 'HTTP/' | tail -1 | awk '{print $2}')
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "SDK not found at $SDK_URL (HTTP $HTTP_CODE)"
           exit 1
-        }
-        
+        fi
+        wget --quiet "$SDK_URL" -O sdk.tar.xz
+
         echo "Extracting SDK..."
         tar -xf sdk.tar.xz
-        
+
     - name: Verify SDK
       run: |
         SDK_DIR=$(ls -d openwrt-sdk-* | head -n 1)
@@ -67,37 +70,56 @@ jobs:
         echo "SDK_DIR: $SDK_DIR"
         ls -la "$SDK_DIR"
         test -x "$SDK_DIR/scripts/feeds"
-        
+
     - name: Add custom feed for our packages
       run: |
         cd "$SDK_DIR"
         echo "src-link crowdblock ${{ github.workspace }}" >> feeds.conf.default
-        
+
     - name: Install package dependencies
       run: |
         cd "$SDK_DIR"
-        # Update feeds for our package
         ./scripts/feeds update crowdblock
-        # Install dependencies for our package
-        ./scripts/feeds install -a -p crowdblock
-        
+        ./scripts/feeds install crowdblock luci-app-crowdblock -p crowdblock
+
     - name: Build crowdblock package
       run: |
         cd "$SDK_DIR"
         make package/crowdblock/compile
         find bin/packages -name "crowdblock-[0-9]*.apk" -exec realpath {} \;
-        
+
     - name: Build luci-app-crowdblock package
       run: |
         cd "$SDK_DIR"
         make package/luci-app-crowdblock/compile
         find bin/packages -name "luci-app-crowdblock-[0-9]*.apk" -exec realpath {} \;
-        
+
+    - name: Generate package index (Packages.gz)
+      run: |
+        cd "$SDK_DIR"
+        ./scripts/ipkg-make-package.sh bin/packages || true
+        find bin/packages -name "Packages.gz" -exec realpath {} \;
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: openwrt-packages
         path: |
-          ${{ env.SDK_DIR }}/bin/packages/**/crowdblock/*.apk
-          ${{ env.SDK_DIR }}/bin/packages/**/crowdblock/luci-*/*.apk
+          ${{ env.SDK_DIR }}/bin/packages/**/*.apk
+          ${{ env.SDK_DIR }}/bin/packages/**/Packages.gz
         retention-days: 30
+
+    - name: Cleanup SDK
+      if: always()
+      run: |
+        rm -rf openwrt-sdk-* sdk.tar.xz
+
+    - name: Create GitHub Release (tags only)
+      if: startsWith(github.ref, 'refs/tags/v')
+      needs: build
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          ${{ env.SDK_DIR }}/bin/packages/**/*.apk
+        tag_name: ${{ github.ref_name }}
+        generate_release_notes: true
