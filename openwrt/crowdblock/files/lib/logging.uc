@@ -55,3 +55,4 @@ function ms_since(then) {
 	return (time() - then) * 1000;
 }
 
+export { debug, info, warn_log, error_log, ms_since };
