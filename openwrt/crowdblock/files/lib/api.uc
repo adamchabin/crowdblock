@@ -2,7 +2,7 @@
 'use strict';
 
 import { popen, open, stat, unlink, rmdir, mkdtemp, rename } from 'fs';
-import { debug, ms_since } from 'crowdblock.config';
+import { debug, ms_since } from 'crowdblock.log';
 
 export const VERSION = '0.1.0';
 

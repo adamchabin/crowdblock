@@ -160,13 +160,11 @@ function local_addresses(cfg) {
 		'pool.ntp.org'
 	];
 	
-	for (let hostname of commonNtpServers) {
+	for (let i = 0; i < commonNtpServers.length; i++) {
+		let hostname = commonNtpServers[i];
 		// In a full implementation, we would resolve each hostname to IP(s) and add to res
 		info(`Would resolve NTP server ${hostname} to IP for whitelisting (implementation pending)`);
 	}
-
-	conn.disconnect();
-	return res;
 }
 
 function build_whitelist(cfg) {
@@ -303,7 +301,6 @@ function purge_whitelisted(st, wl) {
 	}
 
 	return n;
-}
 }
 
 // Returns true on success.

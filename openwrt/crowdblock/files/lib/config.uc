@@ -2,6 +2,7 @@
 'use strict';
 
 import { cursor } from 'uci';
+import { debug, info, warn_log, error_log, ms_since } from 'crowdblock.log';
 
 // "90" -> 90, "30m" -> 1800, "24h" -> 86400, "7d" -> 604800
 function parse_duration(v) {
@@ -106,65 +107,4 @@ function save_paused(list) {
 	else
 		c.delete('crowdblock', 'main', 'paused');
 
-	return c.commit('crowdblock');
-}
-
-// Enhanced logging system with different levels and rate limiting
-let _last_log_time = 0;
-let _last_log_message = '';
-let _log_rate_limit_interval = 5000; // 5 seconds
-
-// Helper function to get current timestamp in milliseconds
-function timestamp() {
-	let t = clock(true);
-	return t[0] * 1000 + t[1] / 1000000;
-}
-
-// Rate-limited logging to prevent flood
-function rate_limited_log(level, fmt, ...args) {
-	let now = timestamp();
-	let message = sprintf(fmt, ...args);
-	
-	// If this is the same message as last time and within rate limit interval, suppress
-	if (now - _last_log_time < _log_rate_limit_interval && message === _last_log_message) {
-		return;
-	}
-	
-	_last_log_time = now;
-	_last_log_message = message;
-	
-	// Format: [LEVEL] timestamp message
-	let ts = new Date(now).toISOString();
-	print(sprintf('[%s] %s %s\n', level, ts, message));
-}
-
-// Option debug: details of every sync in the system log, prefixed "DEBUG"
-// (logread -e crowdblock).
-function debug(cfg, fmt, ...args) {
-	if (cfg?.debug)
-		rate_limited_log('DEBUG', fmt, ...args);
-}
-
-// Option info: general information
-function info(cfg, fmt, ...args) {
-	if (cfg?.debug) // For now, only show info when debug is enabled, but could be separate config
-		rate_limited_log('INFO', fmt, ...args);
-}
-
-// Option warn: warnings
-function warn_log(fmt, ...args) {
-	rate_limited_log('WARN', fmt, ...args);
-}
-
-// Option error: errors
-function error_log(fmt, ...args) {
-	rate_limited_log('ERROR', fmt, ...args);
-}
-
-// Milliseconds since `start` = clock(true).
-function ms_since(start) {
-	let now = clock(true);
-	return (now[0] - start[0]) * 1000 + int((now[1] - start[1]) / 1000000);
-}
-
-export { parse_duration, load, load_paused, save_paused, debug, info, warn_log, error_log, ms_since };
+export { parse_duration, load, load_paused, save_paused };
