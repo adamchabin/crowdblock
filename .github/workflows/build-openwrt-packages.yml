@@ -23,8 +23,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       # OpenWrt SDK version and target
-      # NOTE: OpenWrt versions are YY.MM (e.g. 24.10). Verify OPENWRT_VERSION exists
-      # on https://downloads.openwrt.org/releases/ before changing.
+      # Confirmed: https://downloads.openwrt.org/releases/25.12.5/targets/mediatek/filogic/
       OPENWRT_VERSION: 25.12.5
       OPENWRT_TARGET: mediatek/filogic
       OPENWRT_GCC_VERSION: 14.3.0
@@ -36,7 +35,7 @@ jobs:
     - name: Set up dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget tar xz-utils gcc g++ make ncurses-dev libssl-dev rsync
+        sudo apt-get install -y wget tar zstd gcc g++ make ncurses-dev libssl-dev rsync
 
     - name: Cache OpenWrt SDK
       uses: actions/cache@v5
@@ -51,7 +50,7 @@ jobs:
       run: |
         # OpenWrt SDK filenames replace '/' with '-' in the target
         TARGET_SLUG="${OPENWRT_TARGET//\//-}"
-        SDK_FILENAME="openwrt-sdk-${OPENWRT_VERSION}-${TARGET_SLUG}_gcc-${OPENWRT_GCC_VERSION}_musl.Linux-x86_64.tar.xz"
+        SDK_FILENAME="openwrt-sdk-${OPENWRT_VERSION}-${TARGET_SLUG}_gcc-${OPENWRT_GCC_VERSION}_musl.Linux-x86_64.tar.zst"
         SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${OPENWRT_TARGET}/${SDK_FILENAME}"
 
         echo "Downloading OpenWrt SDK from $SDK_URL"
@@ -60,10 +59,10 @@ jobs:
           echo "SDK not found at $SDK_URL (HTTP $HTTP_CODE)"
           exit 1
         fi
-        wget --quiet "$SDK_URL" -O sdk.tar.xz
+        wget --quiet "$SDK_URL" -O sdk.tar.zst
 
         echo "Extracting SDK..."
-        tar -xf sdk.tar.xz
+        tar --zstd -xf sdk.tar.zst
 
     - name: Verify SDK
       run: |
@@ -114,7 +113,7 @@ jobs:
     - name: Cleanup SDK
       if: always()
       run: |
-        rm -rf openwrt-sdk-* sdk.tar.xz
+        rm -rf openwrt-sdk-* sdk.tar.zst
 
   release:
     needs: build
