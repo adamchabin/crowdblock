@@ -22,10 +22,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # OpenWrt SDK version and target - using stable 24.10.0 release
-      OPENWRT_VERSION: 24.10.0
+      # OpenWrt SDK version and target - using 25.12.5 as requested
+      OPENWRT_VERSION: 25.12.5
       OPENWRT_TARGET: mediatek/filogic
-      OPENWRT_GCC_VERSION: 13.2.0
+      OPENWRT_GCC_VERSION: 14.3.0
       
     steps:
     - name: Checkout repository
@@ -47,14 +47,13 @@ jobs:
     - name: Download OpenWrt SDK
       if: steps.cache.outputs.cache-hit != 'true'
       run: |
-        SDK_FILENAME="openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ env.OPENWRT_TARGET }}_gcc-${{ env.OPENWRT_GCC_VERSION }}_musl.Linux-x86_64.tar.xz"
+        SDK_FILENAME="openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ env.OPENWRT_TARGET//\//- }}_gcc-${{ env.OPENWRT_GCC_VERSION }}_musl.Linux-x86_64.tar.xz"
         SDK_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/${{ env.OPENWRT_TARGET }}/${SDK_FILENAME}"
         
         echo "Downloading OpenWrt SDK from $SDK_URL"
         wget --quiet "$SDK_URL" -O sdk.tar.xz || {
           echo "Failed to download SDK from $SDK_URL"
-          echo "Checking if SDK exists..."
-          wget --spider "$SDK_URL" 2>&1 | head -5
+          echo "HTTP status code: $(wget --server-response --spider "$SDK_URL" 2>&1 | grep 'HTTP/' | tail -1 | awk '{print $2}')"
           exit 1
         }
         
