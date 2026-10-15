@@ -22,10 +22,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # OpenWrt SDK version and target
-      OPENWRT_VERSION: 25.12.5
-      OPENWRT_TARGET: mediatek-filogic
-      OPENWRT_GCC_VERSION: 14.3.0
+      # OpenWrt SDK version and target - using stable 24.10.0 release
+      OPENWRT_VERSION: 24.10.0
+      OPENWRT_TARGET: mediatek/filogic
+      OPENWRT_GCC_VERSION: 13.2.0
       
     steps:
     - name: Checkout repository
@@ -51,7 +51,12 @@ jobs:
         SDK_URL="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/${{ env.OPENWRT_TARGET }}/${SDK_FILENAME}"
         
         echo "Downloading OpenWrt SDK from $SDK_URL"
-        wget --quiet "$SDK_URL" -O sdk.tar.xz
+        wget --quiet "$SDK_URL" -O sdk.tar.xz || {
+          echo "Failed to download SDK from $SDK_URL"
+          echo "Checking if SDK exists..."
+          wget --spider "$SDK_URL" 2>&1 | head -5
+          exit 1
+        }
         
         echo "Extracting SDK..."
         tar -xf sdk.tar.xz
