@@ -324,7 +324,7 @@ function apply_delta(cfg, file, dir) {
 	unlink(plain);
 	unlink(plain + '.gz');
 
-	return err ? { error: err } : { etag: d.etag, upserted: length(upserted), removed: length(d.remove) };
+	return err ? { error: err } : { etag: d.etag, upserted: length(upsert), removed: length(d.remove) };
 }
 
 // Downloads the list into LIST_FILE. Returns { etag }, { etag, delta } (a
