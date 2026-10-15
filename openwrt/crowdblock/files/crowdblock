@@ -68,7 +68,7 @@ function save_state(st) {
 
 	f.write(sprintf('%J', st));
 	f.close();
-	fs.rename(tmp, STATE_FILE);
+	system('mv ' + tmp + ' ' + STATE_FILE);
 }
 
 // --- locking ------------------------------------------------------------
@@ -86,7 +86,7 @@ function acquire_lock(timeout_sec) {
 		// Try to create the lock file exclusively
 		let fd = fs.open(lock_path, 'w');
 		if (fd) {
-			fs.close(fd);
+			fd.close();
 			return true; // Lock acquired
 		}
 		
