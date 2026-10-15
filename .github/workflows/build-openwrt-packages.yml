@@ -80,7 +80,7 @@ jobs:
     - name: Install package dependencies
       run: |
         cd "$SDK_DIR"
-        ./scripts/feeds update crowdblock
+        ./scripts/feeds update crowdblock luci
         ./scripts/feeds install crowdblock luci-app-crowdblock -p crowdblock
 
     - name: Generate .config (non-interactive)

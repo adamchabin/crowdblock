@@ -1,5 +1,7 @@
 include $(TOPDIR)/rules.mk
 
+PKG_NAME:=luci-app-crowdblock
+
 LUCI_TITLE:=LuCI support for crowdblock
 LUCI_DEPENDS:=+crowdblock
 LUCI_PKGARCH:=all
