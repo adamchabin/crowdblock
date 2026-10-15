@@ -87,13 +87,18 @@ jobs:
       run: |
         cd "$SDK_DIR"
         TERM=linux make defconfig
-        TERM=linux make olddefconfig
+        # OpenWrt SDK 25.12.5: olddefconfig is broken – kconfig rejects
+        # 'defaults for choice values not supported' in Config-build.in and
+        # PACKAGE_libc/PACKAGE_libgcc type redefinitions. Disable .config
+        # regeneration so package builds can run non-interactively.
+        sed -i 's/^\.config:.*$/.config:/' include/toplevel.mk
 
     - name: Build crowdblock package
       env:
         TERM: linux
       run: |
         cd "$SDK_DIR"
+        echo 'CONFIG_PACKAGE_crowdblock=y' >> .config
         make package/crowdblock/compile
         find bin/packages -name "crowdblock-[0-9]*.apk" -exec realpath {} \;
 
@@ -102,6 +107,7 @@ jobs:
         TERM: linux
       run: |
         cd "$SDK_DIR"
+        echo 'CONFIG_PACKAGE_luci-app-crowdblock=y' >> .config
         make package/luci-app-crowdblock/compile
         find bin/packages -name "luci-app-crowdblock-[0-9]*.apk" -exec realpath {} \;
 
