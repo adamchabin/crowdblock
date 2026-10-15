@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
 
 # Copy server source code and embedded assets (see go:embed in migrate.go, stats.go)
-COPY server/*.go server/*.sql server/*.html ./
+COPY server/*.go server/*.sql server/*.html server/*.json ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server .

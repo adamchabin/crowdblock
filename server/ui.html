@@ -163,6 +163,28 @@
       #msg.bad {
         color: #dc2626;
       }
+      #map {
+        position: relative;
+        overflow: hidden;
+        background-image:
+          linear-gradient(90deg, #6b728033 1px, transparent 1px),
+          linear-gradient(#6b728033 1px, transparent 1px);
+        background-size:
+          10% 100%,
+          100% 20%;
+        border-radius: 8px;
+      }
+      #map svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      #maptoggle {
+        padding: 0 6px;
+        font-size: 12px;
+        text-transform: none;
+        letter-spacing: 0;
+      }
     </style>
   </head>
   <body>
@@ -201,6 +223,13 @@
         <h2>Reports per hour, last 24 h</h2>
         <div class="chart" id="hourly"></div>
         <div class="axis mute"><span>24 h ago</span><span>now</span></div>
+      </div>
+      <div class="card" style="margin-top: 12px">
+        <h2>
+          World map (reported IPs, 24 h)
+          <button type="button" class="plain" id="maptoggle">hide</button>
+        </h2>
+        <div id="map"></div>
       </div>
       <h2 style="margin: 22px 0 0">
         Cache
@@ -256,6 +285,63 @@
           bar.append(el("span", name), track, el("span", fmt(n)));
           box.append(bar);
         }
+      }
+
+      let worldCache = null;
+      async function world() {
+        if (!worldCache) {
+          const r = await fetch("/api/v1/world");
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          worldCache = await r.json();
+        }
+        return worldCache;
+      }
+      // Choropleth of reported IPs over simplified country shapes;
+      // countries without shapes stay visible in the Top countries bars.
+      function drawMap(box, geo, countries) {
+        box.replaceChildren();
+        const byIso = {};
+        let max = 1;
+        for (const c of countries) {
+          byIso[c.country] = c;
+          if (c.ips > max) max = c.ips;
+        }
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("viewBox", "0 6 360 144");
+        for (const f of geo.features) {
+          const iso = f.properties && f.properties.iso2;
+          const hit = iso && byIso[iso];
+          for (const poly of f.geometry.coordinates) {
+            const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+            path.setAttribute(
+              "d",
+              poly
+                .map((ring) =>
+                  ring
+                    .map(
+                      (p, i) =>
+                        (i ? "L" : "M") + (p[0] + 180).toFixed(1) + " " + (90 - p[1]).toFixed(1),
+                    )
+                    .join(""),
+                )
+                .join("") + "Z",
+            );
+            path.setAttribute("fill", hit ? "var(--bar)" : "currentColor");
+            path.setAttribute(
+              "fill-opacity",
+              hit ? (0.35 + 0.65 * Math.sqrt(hit.ips / max)).toFixed(2) : "0.08",
+            );
+            path.setAttribute("stroke", "var(--bg)");
+            path.setAttribute("stroke-width", "0.4");
+            if (hit) {
+              const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+              title.textContent = `${hit.country_name || iso}: ${fmt(hit.ips)}`;
+              path.append(title);
+            }
+            svg.append(path);
+          }
+        }
+        box.append(svg);
       }
 
       async function load() {
@@ -334,6 +420,11 @@
             $("countries"),
             s.countries.map((c) => [c.country_name || c.country, c.ips]),
           );
+          world()
+            .then((geo) => drawMap($("map"), geo, s.countries))
+            .catch(() => {
+              $("map").replaceChildren(el("div", "map unavailable", "mute"));
+            });
           bars(
             $("sources"),
             Object.entries(s.sources).sort((a, b) => b[1] - a[1]),
@@ -342,6 +433,10 @@
           $("err").textContent = " · cannot load stats: " + e.message;
         }
       }
+      $("maptoggle").onclick = () => {
+        const hidden = $("map").toggleAttribute("hidden");
+        $("maptoggle").textContent = hidden ? "show" : "hide";
+      };
       $("reg").onclick = () => {
         $("msg").textContent = "";
         $("msg").className = "";

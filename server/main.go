@@ -141,6 +141,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/ips", handleListIPs)
 	mux.HandleFunc("GET /api/v1/geoip/{ip}", handleGeoIP)
 	mux.HandleFunc("POST /api/v1/geoip/batch", handleGeoIPBatch)
+	mux.HandleFunc("GET /api/v1/world", handleWorld)
 
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {

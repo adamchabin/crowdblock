@@ -15,6 +15,9 @@ import (
 //go:embed ui.html
 var uiHTML []byte
 
+//go:embed world.json
+var worldJSON []byte
+
 // Aggregates only: no addresses and no user data, so the endpoint is public.
 type statsResponse struct {
 	GeneratedAt    time.Time      `json:"generated_at"`
@@ -225,4 +228,13 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(uiHTML)
+}
+
+// worldJSON holds simplified country shapes with ISO 3166-1 alpha-2 codes
+// (generated once into world.json), matched client-side against stats.
+func handleWorld(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/geo+json")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(worldJSON)
 }
