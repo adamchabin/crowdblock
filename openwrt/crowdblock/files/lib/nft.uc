@@ -59,12 +59,12 @@ function setup(cfg) {
 delete table ${TABLE}
 table ${TABLE} {
 	set v4 {
-		type ipv4_prefix
+		type ipv4_addr
 		flags timeout
 		size ${cfg.max_entries}
 	}
 	set v6 {
-		type ipv6_prefix
+		type ipv6_addr
 		flags timeout
 		size ${cfg.max_entries}
 	}
