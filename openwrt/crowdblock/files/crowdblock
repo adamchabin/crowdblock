@@ -146,27 +146,13 @@ function local_addresses(cfg) {
 			push(res, a);
 	}
 
-	// Add crowdblock server address (resolved from hostname) - best effort
+	// Whitelist the crowdblock server itself (best effort, ucode globals only)
 	if (cfg && cfg.server) {
 		try {
-			// Extract hostname from URL (e.g., https://server.org:8080 -> server.org)
-			let serverUrl = cfg.server.trim();
-			if (serverUrl) {
-				// Remove protocol
-				let urlWithoutProtocol = serverUrl.replace(/^https?:\/\//, '');
-				// Remove path, port, query, fragment
-				let hostname = urlWithoutProtocol.split(/[\/\?\#:]/)[0];
-				
-				if (hostname && hostname.length > 0) {
-					// Try to resolve hostname using getent hosts (available in busybox)
-					// Note: In a full implementation, we would use popen to execute the command and parse output
-					// For this version, we'll skip actual resolution to avoid complexity in the sandbox
-					// but log that resolution would happen
-					info(`Would resolve crowdblock server ${hostname} to IP for whitelisting (implementation pending)`);
-				}
-			}
+			let m = match(trim(cfg.server), /^https?:\/\/([^\/\?#:]+)/);
+			if (m)
+				info(`Would resolve crowdblock server ${m[1]} to IP for whitelisting (implementation pending)`);
 		} catch (e) {
-			// If we can't resolve, log but don't fail - whitelisting is best-effort
 			info(`Could not resolve crowdblock server for whitelisting: ${e.message}`);
 		}
 	}
@@ -179,11 +165,13 @@ function local_addresses(cfg) {
 		'pool.ntp.org'
 	];
 	
-	for (let i = 0; i < commonNtpServers.length; i++) {
+	for (let i = 0; i < length(commonNtpServers); i++) {
 		let hostname = commonNtpServers[i];
 		// In a full implementation, we would resolve each hostname to IP(s) and add to res
 		info(`Would resolve NTP server ${hostname} to IP for whitelisting (implementation pending)`);
 	}
+
+	return res;
 }
 
 function build_whitelist(cfg) {
