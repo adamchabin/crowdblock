@@ -395,6 +395,7 @@ function sync(cfg, st) {
 			if (!err)
 				state_dirty = true;
 		}
+		debug(cfg, 'sync: nftables exists check done, err=%s', err ?? 'none');
 
 		if (!err) {
 			let paused = load_paused();
@@ -441,7 +442,7 @@ function sync(cfg, st) {
 		return true;
 	} catch (e) {
 		// Handle any unexpected errors
-		error_log('sync failed: unexpected error: %s', e.message);
+		error_log('sync failed: unexpected error: %s at sync step', e.message);
 		release_lock_on_exit();
 		return false;
 	}

@@ -94,18 +94,35 @@ function load() {
 // Addresses paused by the user (`crowdblock pause`, LuCI): kept in the state,
 // but not blocked. Read on every sync, as the list changes at runtime.
 function load_paused() {
-	let p = cursor().get('crowdblock', 'main', 'paused') ?? [];
+	let p = [];
+	try {
+		p = cursor().get('crowdblock', 'main', 'paused') ?? [];
+	} catch (e) {
+		warn_log('load_paused: ubus unavailable: %s', e.message);
+	}
 	return (type(p) == 'array') ? p : [ p ];
 }
 
 // Commits directly (no config.change event), so the daemon is not restarted.
 function save_paused(list) {
-	let c = cursor();
+	let c;
+	try {
+		c = cursor();
+	} catch (e) {
+		warn_log('save_paused: ubus unavailable: %s', e.message);
+		return false;
+	}
 
-	if (length(list))
-		c.set('crowdblock', 'main', 'paused', list);
-	else
-		c.delete('crowdblock', 'main', 'paused');
+	try {
+		if (length(list))
+			c.set('crowdblock', 'main', 'paused', list);
+		else
+			c.delete('crowdblock', 'main', 'paused');
+	} catch (e) {
+		warn_log('save_paused: ubus call failed: %s', e.message);
+		return false;
+	}
+	return true;
 }
 
 export { parse_duration, load, load_paused, save_paused };
