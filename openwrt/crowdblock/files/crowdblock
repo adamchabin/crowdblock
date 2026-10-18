@@ -60,7 +60,13 @@ function load_state() {
 	return st;
 }
 
+let state_dirty = false;
+
 function save_state(st) {
+	if (!state_dirty)
+		return;
+	state_dirty = false;
+
 	let tmp = STATE_FILE + '.tmp';
 	let f = fs.open(tmp, 'w');
 	if (!f)
@@ -83,20 +89,26 @@ function acquire_lock(timeout_sec) {
 	let lock_path = LOCK_FILE;
 	
 	while (true) {
-		// Try to create the lock file exclusively
-		let fd = fs.open(lock_path, 'w');
+		// Try to open the lock file for reading: if it exists, lock is held
+		let fd = fs.open(lock_path, 'r');
+		if (fd) {
+			fd.close();
+			let elapsed = time() - start;
+			if (elapsed >= timeout_sec)
+				return false; // Timeout
+			sleep(1);
+			continue;
+		}
+		// Lock file does not exist: create it exclusively
+		fd = fs.open(lock_path, 'w');
 		if (fd) {
 			fd.close();
 			return true; // Lock acquired
 		}
-		
-		// Check if we've exceeded timeout
+		// Race: another process created it between stat and open
 		let elapsed = time() - start;
-		if (elapsed >= timeout_sec) {
-			return false; // Timeout
-		}
-		
-		// Wait a bit before retrying
+		if (elapsed >= timeout_sec)
+			return false;
 		sleep(1);
 	}
 }
@@ -115,7 +127,13 @@ function local_addresses(cfg) {
 	if (!conn)
 		return res;
 
-	let dump = conn.call('network.interface', 'dump');
+	let dump;
+	try {
+		dump = conn.call('network.interface', 'dump');
+	} catch (e) {
+		warn_log('local_addresses: ubus call failed: %s', e.message);
+		return res;
+	}
 
 	for (let iface in dump?.interface ?? []) {
 		for (let a in iface['ipv4-address'] ?? [])
@@ -187,8 +205,16 @@ function forget(st, ip) {
 	delete st.sources[ip];
 }
 
+let last_expire_check = 0;
+
 // Returns the number of dropped entries.
+// Only runs every EXPIRE_CHECK_INTERVAL seconds to reduce CPU load.
+const EXPIRE_CHECK_INTERVAL = 300; // 5 minutes
 function drop_expired(st, now) {
+	if (now - last_expire_check < EXPIRE_CHECK_INTERVAL)
+		return 0;
+	last_expire_check = now;
+
 	let n = 0;
 	for (let ip in keys(st.entries))
 		if (st.entries[ip] <= now) {
@@ -309,6 +335,8 @@ function sync(cfg, st) {
 	let now = time();
 	let start = clock(true);
 	let expired = drop_expired(st, now);
+	if (expired > 0)
+		state_dirty = true;
 	debug(cfg, 'sync: %d entries in the state, %d expired since the last sync', length(keys(st.entries)), expired);
 
 	// Acquire lock to prevent concurrent sync operations (timeout: 2x sync_interval)
@@ -343,9 +371,13 @@ function sync(cfg, st) {
 
 		let wl = build_whitelist(cfg);
 		let purged = purge_whitelisted(st, wl);
-		if (purged)
+		if (purged) {
 			debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
+			state_dirty = true;
+		}
 		let stats = merge(cfg, st, wl, now);
+		if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0)
+			state_dirty = true;
 
 		if (stats.error) {
 			st.last_error = stats.error;
@@ -360,6 +392,8 @@ function sync(cfg, st) {
 		if (!nft.exists()) {
 			warn_log('nftables table missing (firewall restarted?), recreating it');
 			err = nft.setup(cfg);
+			if (!err)
+				state_dirty = true;
 		}
 
 		if (!err) {

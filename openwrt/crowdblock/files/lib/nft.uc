@@ -12,6 +12,9 @@ const TABLE = 'inet crowdblock';
 const BATCH_FILE = '/tmp/crowdblock/batch.nft';
 const CHUNK = 256;
 
+let last_v4 = [];
+let last_v6 = [];
+
 function run_batch(script) {
 	let f = open(BATCH_FILE, 'w');
 	if (!f)
@@ -104,11 +107,54 @@ function apply(entries, now, paused) {
 			push(index(ip, ':') >= 0 ? v6 : v4, `${ip} timeout ${ttl}s`);
 	}
 
-	let lines = [ `flush set ${TABLE} v4`, `flush set ${TABLE} v6` ];
-	add_elements(lines, 'v4', v4);
-	add_elements(lines, 'v6', v6);
+	// Compute diff from last applied state to avoid full flush + re-add
+	let del_v4 = [], del_v6 = [], add_v4 = [], add_v6 = [];
+	for (let e in last_v4) {
+		let found = false;
+		for (let n in v4) {
+			if (v4[n] == last_v4[e]) { found = true; break; }
+		}
+		if (!found) push(del_v4, last_v4[e]);
+	}
+	for (let e in v4) {
+		let found = false;
+		for (let l in last_v4) {
+			if (v4[e] == last_v4[l]) { found = true; break; }
+		}
+		if (!found) push(add_v4, v4[e]);
+	}
+	for (let e in last_v6) {
+		let found = false;
+		for (let n in v6) {
+			if (v6[n] == last_v6[e]) { found = true; break; }
+		}
+		if (!found) push(del_v6, last_v6[e]);
+	}
+	for (let e in v6) {
+		let found = false;
+		for (let l in last_v6) {
+			if (v6[e] == last_v6[l]) { found = true; break; }
+		}
+		if (!found) push(add_v6, v6[e]);
+	}
 
-	return run_batch(join('\n', lines) + '\n');
+	let lines = [];
+	add_elements(lines, 'v4', add_v4);
+	add_elements(lines, 'v6', add_v6);
+
+	// Build delete commands: delete element TABLE set { ip }
+	let del_lines = [];
+	for (let e in del_v4) push(del_lines, `delete element ${TABLE} v4 { ${del_v4[e].split(' ')[0]} }`);
+	for (let e in del_v6) push(del_lines, `delete element ${TABLE} v6 { ${del_v6[e].split(' ')[0]} }`);
+
+	if (length(del_lines) == 0 && length(lines) == 0)
+		return null; // nothing changed
+
+	// Remember current state
+	last_v4 = v4;
+	last_v6 = v6;
+
+	return run_batch(join('\n', del_lines.concat(lines)) + '\n');
 }
 
 // Single-element changes for `crowdblock pause` / `resume`.

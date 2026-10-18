@@ -337,41 +337,46 @@ function http_get(cfg, url, etag) {
 
 	let files = { body: dir + '/body', err: dir + '/err', rc: dir + '/rc' };
 	let start = clock(true);
+	let res = { error: 'unexpected error' };
 
-	debug(cfg, 'fetch %s, %s', replace(url, /^.*\/api\//, '/api/'),
-		etag ? 'If-None-Match ' + etag : 'full list requested');
+	try {
+		debug(cfg, 'fetch %s, %s', replace(url, /^.*\/api\//, '/api/'),
+			etag ? 'If-None-Match ' + etag : 'full list requested');
 
-	let res = download(cfg, url, files.body, files.err, etag);
+		res = download(cfg, url, files.body, files.err, etag);
 
-	if (res.error) {
-		debug(cfg, 'fetch failed after %d ms: %s', ms_since(start), res.error);
-	}
-	else if (res.not_modified) {
-		debug(cfg, 'fetch: 304 not modified, %d ms', ms_since(start));
-	}
-	else {
-		let body = check_body(files.body, files.rc);
-		let kind = body.error ? null : body_kind(files.body);
-
-		if (!body.error)
-			debug(cfg, 'fetch: %s, %d B received, %d B unpacked, %d ms',
-				(kind == '{') ? 'delta' : 'full list', body.size, body.unpacked, ms_since(start));
-
-		if (body.error) {
-			res = { error: body.error };
+		if (res.error) {
+			debug(cfg, 'fetch failed after %d ms: %s', ms_since(start), res.error);
 		}
-		else if (kind == '{') {
-			let d = apply_delta(cfg, files.body, dir);
-			res = d.error
-				? { error: d.error, retry_full: true }
-				: { etag: d.etag, delta: { upserted: d.upserted, removed: d.removed } };
-		}
-		else if (!rename(files.body, LIST_FILE)) {
-			res = { error: 'cannot write ' + LIST_FILE };
+		else if (res.not_modified) {
+			debug(cfg, 'fetch: 304 not modified, %d ms', ms_since(start));
 		}
 		else {
-			res = { etag: etag_of(LIST_FILE) };
+			let body = check_body(files.body, files.rc);
+			let kind = body.error ? null : body_kind(files.body);
+
+			if (!body.error)
+				debug(cfg, 'fetch: %s, %d B received, %d B unpacked, %d ms',
+					(kind == '{') ? 'delta' : 'full list', body.size, body.unpacked, ms_since(start));
+
+			if (body.error) {
+				res = { error: body.error };
+			}
+			else if (kind == '{') {
+				let d = apply_delta(cfg, files.body, dir);
+				res = d.error
+					? { error: d.error, retry_full: true }
+					: { etag: d.etag, delta: { upserted: d.upserted, removed: d.removed } };
+			}
+			else if (!rename(files.body, LIST_FILE)) {
+				res = { error: 'cannot write ' + LIST_FILE };
+			}
+			else {
+				res = { etag: etag_of(LIST_FILE) };
+			}
 		}
+	} catch (e) {
+		res = { error: e.message || 'unexpected error' };
 	}
 
 	for (let k, path in files)
