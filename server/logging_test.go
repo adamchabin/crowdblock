@@ -58,9 +58,9 @@ func TestLogNotesForLists(t *testing.T) {
 	for _, tc := range []struct {
 		header, value, want string
 	}{
-		{"Accept-Encoding", "gzip", ` 200 in=0B out=\d+B \S+ list=full enc=gzip from=cache tier=1/1440$`},
-		{"", "", ` 200 in=0B out=44B \S+ list=full enc=plain from=cache tier=1/1440$`},
-		{"If-None-Match", p.etag, ` 304 in=0B out=0B \S+ list=not-modified from=cache tier=1/1440$`},
+		{"Accept-Encoding", "gzip", ` 200 in=0B out=\d+B \S+ list=full enc=gzip from=cache tier=1/1440 records=\d+$`},
+		{"", "", ` 200 in=0B out=44B \S+ list=full enc=plain from=cache tier=1/1440 records=\d+$`},
+		{"If-None-Match", p.etag, ` 304 in=0B out=0B \S+ list=not-modified from=cache tier=1/1440 records=0$`},
 	} {
 		out.Reset()
 		req := httptest.NewRequest("GET", "/api/v1/ips", nil)

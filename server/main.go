@@ -203,13 +203,20 @@ func logRequests(next http.Handler) http.Handler {
 
 // logNotes are details a handler adds to its request's log line, e.g.
 // "list=full enc=gzip from=cache tier=1/1440".
-type logNotes struct{ parts []string }
+type logNotes struct {
+	parts      []string
+	records    int   // number of IP records sent in this response
+	recordsSet bool  // true once records is set for this request
+}
 
 type logNotesKey struct{}
 
 func (n *logNotes) String() string {
-	if len(n.parts) == 0 {
+	if len(n.parts) == 0 && !n.recordsSet {
 		return ""
+	}
+	if n.recordsSet {
+		n.parts = append(n.parts, fmt.Sprintf("records=%d", n.records))
 	}
 	return " " + strings.Join(n.parts, " ")
 }
@@ -218,6 +225,15 @@ func (n *logNotes) String() string {
 func addLogNote(r *http.Request, key string, value any) {
 	if n, ok := r.Context().Value(logNotesKey{}).(*logNotes); ok {
 		n.parts = append(n.parts, fmt.Sprintf("%s=%v", key, value))
+	}
+}
+
+// setLogRecords records how many IP records were sent in this response,
+// so the request log can show "records=N".
+func setLogRecords(r *http.Request, n int) {
+	if ln, ok := r.Context().Value(logNotesKey{}).(*logNotes); ok {
+		ln.records = n
+		ln.recordsSet = true
 	}
 }
 

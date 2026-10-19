@@ -340,11 +340,13 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 	// ("diff" will come with delta sync.)
 	if r.Header.Get("If-None-Match") == etag {
 		addLogNote(r, "list", "not-modified")
+		setLogRecords(r, 0)
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
 	addLogNote(r, "list", "full")
+	setLogRecords(r, bytes.Count(body, []byte("\"ip\":")))
 	if gzipped {
 		addLogNote(r, "enc", "gzip")
 		h.Set("Content-Encoding", "gzip")

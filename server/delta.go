@@ -265,6 +265,7 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	}
 
 	addLogNote(r, "list", "diff")
+	setLogRecords(r, bytes.Count(body, []byte("\"ip\":")))
 	addLogNote(r, "enc", map[bool]string{true: "gzip", false: "plain"}[gzipped])
 
 	h := w.Header()
