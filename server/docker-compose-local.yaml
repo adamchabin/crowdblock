@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16
-    container_name: pg
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -18,7 +17,6 @@ services:
 
   redis:
     image: redis:7
-    container_name: redis
     ports:
       - "6379:6379"
     healthcheck:
@@ -45,8 +43,11 @@ services:
   # For `go run` (run.sh) start only the databases: docker compose up -d postgres redis
   server:
     image: crowdblock-server:dev-local
-    build: ./Dockerfile
-    container_name: crowdblock-server
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    # No healthcheck here: the distroless image has no shell/wget.
+    # run-tests.sh waits for http://localhost:8080/api/v1/health from the host.
     environment:
       DATABASE_URL: postgres://postgres:password@postgres:5432/crowdblock?sslmode=disable
       REDIS_ADDR: redis:6379

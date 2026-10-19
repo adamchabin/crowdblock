@@ -99,11 +99,10 @@ check_prereqs() {
         echo "ERROR: docker compose not found" >&2
         exit 1
     fi
+    USE_DOCKER_K6=false
     if ! command -v k6 &> /dev/null; then
         echo "WARNING: k6 not found locally, will run via docker"
         USE_DOCKER_K6=true
-    else
-        USE_DOCKER_K6=false
     fi
 }
 
@@ -112,48 +111,34 @@ start_stack() {
     echo "Starting test stack..."
     docker compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" up -d --build
 
-    echo "Waiting for services to be healthy..."
+    echo "Waiting for server http://localhost:8080/api/v1/health ..."
     local retries=60
     while [[ $retries -gt 0 ]]; do
-        if docker compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" ps --format json | grep -q '"Health":"healthy"'; then
-            local healthy_count=$(docker compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" ps --format json | grep -c '"Health":"healthy"' || true)
-            if [[ $healthy_count -ge 3 ]]; then
-                echo "All services healthy!"
-                break
-            fi
+        if curl -sf --max-time 3 http://localhost:8080/api/v1/health > /dev/null 2>&1; then
+            echo "Server is up!"
+            break
         fi
         sleep 2
         ((retries--))
     done
 
     if [[ $retries -eq 0 ]]; then
-        echo "ERROR: Services did not become healthy in time" >&2
+        echo "ERROR: Server did not become ready in time" >&2
         docker compose -f "$COMPOSE_FILE" -p "$PROJECT_NAME" logs
         exit 1
     fi
-
-    # Give server a moment to finish initialization
-    sleep 3
 }
 
 # Run k6 test
 run_k6() {
     local script="$1"
     shift
-    local env_vars=(
-        "BASE_URL=http://localhost:8080"
-        "DURATION=$DURATION"
-        "READ_RATE=$READ_RATE"
-        "WRITE_RATE=$WRITE_RATE"
-        "ACCOUNT_RATE=${ACCOUNT_RATE:-1}"
-        "USERS=$USERS"
-    )
 
     if [[ "$USE_DOCKER_K6" == "true" ]]; then
         echo "Running k6 via docker..."
         docker run --rm --network host \
             -v "$SCRIPT_DIR/k6:/k6:ro" \
-            -e BASE_URL="$BASE_URL" \
+            -e BASE_URL="http://localhost:8080" \
             -e DURATION="$DURATION" \
             -e READ_RATE="$READ_RATE" \
             -e WRITE_RATE="$WRITE_RATE" \
