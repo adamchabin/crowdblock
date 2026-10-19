@@ -1,0 +1,19 @@
+# crowdblock-reporter configuration
+# Edit this file, then run: systemctl restart crowdblock-reporter
+#
+# CLI flags override values from this file.
+
+server: https://crowdblock.example.org
+api_key: "sfw_your_api_key_here"
+
+plugins:
+  - auth
+  - fail2ban
+
+threshold: 3
+window: 10m
+cooldown: 1h
+dry_run: false
+
+auth_log: /var/log/auth.log
+fail2ban_log: /var/log/fail2ban.log

@@ -22,18 +22,41 @@ import (
 )
 
 func main() {
-	server := flag.String("server", os.Getenv("CROWDBLOCK_SERVER"), "server base URL (env CROWDBLOCK_SERVER)")
-	pluginList := flag.String("plugins", strings.Join(pluginNames(), ","), "comma-separated plugins to enable")
+	configPath := flag.String("config", "/etc/crowdblock-reporter/config.yaml", "path to YAML config file")
 	listPlugins := flag.Bool("list-plugins", false, "list available plugins and exit")
-	threshold := flag.Int("threshold", 3, "attempts within -window before an address is reported (plugins may override)")
-	window := flag.Duration("window", 10*time.Minute, "time window for -threshold")
-	cooldown := flag.Duration("cooldown", time.Hour, "minimum time between two reports of the same address")
-	dryRun := flag.Bool("dry-run", false, "only log what would be reported")
+	flag.Parse()
+
+	if *listPlugins {
+		for _, name := range pluginNames() {
+			p := registry[name]
+			fmt.Printf("%-10s %s (%s)\n", name, p.Description, p.DefaultLog)
+		}
+		return
+	}
+
+	cfg, err := LoadConfig(*configPath)
+	if err != nil {
+		log.Fatalf("cannot load config %s: %v", *configPath, err)
+	}
+
+	server := flag.String("server", cfg.Server, "server base URL (env CROWDBLOCK_SERVER, config server)")
+	pluginList := flag.String("plugins", strings.Join(cfg.Plugins, ","), "comma-separated plugins to enable (config plugins)")
+	threshold := flag.Int("threshold", cfg.Threshold, "attempts within -window before an address is reported (config threshold)")
+	window := flag.Duration("window", cfg.Window, "time window for -threshold (config window)")
+	cooldown := flag.Duration("cooldown", cfg.Cooldown, "minimum time between two reports of the same address (config cooldown)")
+	dryRun := flag.Bool("dry-run", cfg.DryRun, "only log what would be reported (config dry_run)")
 
 	logPaths := map[string]*string{}
 	for _, name := range pluginNames() {
 		p := registry[name]
-		logPaths[name] = flag.String(name+"-log", p.DefaultLog, "log file of the "+name+" plugin")
+		defaultLog := p.DefaultLog
+		switch name {
+		case "auth":
+			defaultLog = cfg.AuthLog
+		case "fail2ban":
+			defaultLog = cfg.Fail2Ban
+		}
+		logPaths[name] = flag.String(name+"-log", defaultLog, "log file of the "+name+" plugin")
 	}
 	flag.Parse()
 
@@ -51,7 +74,7 @@ func main() {
 	}
 
 	// Not a flag: command lines are visible to every user in `ps`.
-	apiKey := os.Getenv("CROWDBLOCK_API_KEY")
+	apiKey := cfg.APIKey
 
 	if !*dryRun && (*server == "" || apiKey == "") {
 		log.Fatal("-server (or CROWDBLOCK_SERVER) and CROWDBLOCK_API_KEY are required, or use -dry-run")

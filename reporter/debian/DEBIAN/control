@@ -1,0 +1,12 @@
+Package: crowdblock-reporter
+Version: 1.0.0
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Crowdblock Team <crowdblock@example.org>
+Depends: adduser, systemd
+Description: Crowdblock attack reporter
+ Watches attack logs (auth.log, fail2ban.log) and reports attacking
+ addresses to the crowdblock server. Configure plugins, thresholds and
+ the server URL in /etc/crowdblock-reporter/config.yaml.
+Homepage: https://github.com/adamchabin/crowdblock

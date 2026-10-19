@@ -46,5 +46,5 @@ else
   jq -r '
     .[] |
     "\(.ip)\t\(.distinct_reporters // 0)\t\(.country // "-")\t\(.country_name // "-")\t\(.sources // [] | join(","))"
-  ' "$TMPFILE" | column -t -s $'\t'
+  ' "$TMPFILE" | awk -F'\t' '{printf "%-16s %-8s %-3s %-20s %s\n", $1, $2, $3, $4, $5}'
 fi
