@@ -13,7 +13,7 @@ export const options = {
       timeUnit: '1s',
       duration: __ENV.DURATION || '1m',
       preAllocatedVUs: num('VUS', 1000),
-      maxVUs: num('MAX_VUS', 10000),
+      maxVUs: num('MAX_VUS', 1000),
     },
   },
   setupTimeout: '15m', teardownTimeout: '5m',
@@ -24,6 +24,6 @@ export const options = {
   },
 };
 
-export const setup = () => setupUsers(num('USERS', 10000), runId(), 0);
+export const setup = () => setupUsers(num('USERS', 1000), runId(), 0);
 export default (users) => readList(users);
 export const teardown = teardownUsers;

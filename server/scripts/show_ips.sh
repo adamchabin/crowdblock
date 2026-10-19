@@ -4,14 +4,18 @@
 # so repeated runs don't burn through the per-user API key limit.
 # Usage: ./show_ips.sh [min_reporters] [minutes]
 #   min_reporters: 1, 5, 10, 20 or 50; minutes: 60, 360, 1440 or 10080
+# Env vars (direnv):
+#   CROWD_BLOCK_BASE_URL  - API base URL (default: http://localhost:8080)
+#   CROWD_BLOCK_EMAIL     - bot email (default: show-ips-bot@example.test)
+#   CROWD_BLOCK_PASSWORD  - bot password (default: show-ips-bot-pw)
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
+BASE_URL="${CROWD_BLOCK_BASE_URL:-http://localhost:8080}"
 MIN_REPORTERS="${1:-1}"
 MINUTES="${2:-60}"
 
-BOT_EMAIL="show-ips-bot"
-BOT_PASSWORD="show-ips-bot-pw"
+BOT_EMAIL="${CROWD_BLOCK_EMAIL:-show-ips-bot@example.test}"
+BOT_PASSWORD="${CROWD_BLOCK_PASSWORD:-show-ips-bot-pw}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEY_CACHE="${SCRIPT_DIR}/.show_ips_api_key"

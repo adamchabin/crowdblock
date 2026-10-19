@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Reports one or more IPs via POST /api/v1/reports using an API key.
-# Usage: ./report_ips.sh <api_key> [ip...]
+# Usage: ./report_ips.sh [api_key] [ip...]
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
-API_KEY="${1:?usage: $0 <api_key> [ip...]}"
+BASE_URL="${CROWD_BLOCK_BASE_URL:-http://localhost:8080}"
+API_KEY="${1:-${CROWD_BLOCK_API_KEY:?Brak CROWD_BLOCK_API_KEY (direnv) lub podaj klucz jako argument}}"
 shift || true
 
 IPS=("$@")

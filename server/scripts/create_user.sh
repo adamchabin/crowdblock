@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Registers the test/testtest user via POST /api/v1/register.
+# Registers a user via POST /api/v1/register.
+# Env vars (direnv):
+#   CROWD_BLOCK_BASE_URL  - API base URL (default: http://localhost:8080)
+#   CROWD_BLOCK_EMAIL     - user email (required)
+#   CROWD_BLOCK_PASSWORD  - user password (required)
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
-EMAIL="${1:-test}"
-PASSWORD="${2:-testtest}"
+BASE_URL="${CROWD_BLOCK_BASE_URL:-http://localhost:8080}"
+EMAIL="${CROWD_BLOCK_EMAIL:?Brak CROWD_BLOCK_EMAIL (direnv)}"
+PASSWORD="${CROWD_BLOCK_PASSWORD:?Brak CROWD_BLOCK_PASSWORD (direnv)}"
 
 response="$(curl -sS -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/register" \
     -H 'Content-Type: application/json' \

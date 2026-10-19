@@ -3,8 +3,8 @@
 # `go install github.com/rakyll/hey@latest`).
 #
 # Usage: ./bench.sh [--writes]
-#   BASE_URL     server            (default http://localhost:8080)
-#   API_KEY      key for reading   (default sfw_dev_dev, from seed.sql)
+#   CROWD_BLOCK_BASE_URL  server            (default http://localhost:8080)
+#   CROWD_BLOCK_API_KEY   key for reading   (default sfw_dev_dev, from seed.sql)
 #   DURATION     per scenario      (default 10s)
 #   CONCURRENCY  parallel clients  (default 50)
 #   MIN_REPORTERS, MINUTES         list tier (default 1, 1440)
@@ -14,8 +14,8 @@
 # (ignored by routers). They are removed by the next start with SEED_DEV_DATA=1.
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
-API_KEY="${API_KEY:-sfw_dev_dev}"
+BASE_URL="${CROWD_BLOCK_BASE_URL:-http://localhost:8080}"
+API_KEY="${CROWD_BLOCK_API_KEY:-sfw_dev_dev}"
 DURATION="${DURATION:-10s}"
 CONCURRENCY="${CONCURRENCY:-50}"
 MIN_REPORTERS="${MIN_REPORTERS:-1}"
