@@ -14,7 +14,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/sync/errgroup"
 	"io"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -158,7 +157,7 @@ func main() {
 	g.Go(func() error {
 		srv := &http.Server{
 			Addr:              addr,
-			Handler:           logRequests(mux),
+			Handler:           recoveryMiddleware(timeoutMiddleware(logRequests(mux))),
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      30 * time.Second,
@@ -183,6 +182,33 @@ func main() {
 	}
 }
 
+// recoveryMiddleware recovers from panics in any handler or middleware,
+// so a single bad request cannot crash the whole server. A 500 is returned
+// and the request is still logged by the outer logRequests middleware.
+func recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("request panic", "path", r.URL.Path, "remote", r.RemoteAddr, "rec", rec)
+				http.Error(w, "server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// timeoutMiddleware wraps every request in a context with a timeout, so a
+// slow or stuck handler cannot hold database connections and other resources
+// indefinitely. The timeout is enforced by pgx/redis respecting the context.
+func timeoutMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		r = r.WithContext(ctx)
+		next.ServeHTTP(w, r)
+	})
+}
+
 // logRequests logs every incoming HTTP request to the console: method, path,
 // remote address, response status, bytes received / sent, and duration.
 func logRequests(next http.Handler) http.Handler {
@@ -196,8 +222,9 @@ func logRequests(next http.Handler) http.Handler {
 
 		next.ServeHTTP(sw, r)
 
-		log.Printf("%s %s %s %d in=%s out=%s %s%s", r.RemoteAddr, r.Method, r.URL.Path, sw.status,
+		msg := fmt.Sprintf("%s %s %s %d in=%s out=%s %s%s", r.RemoteAddr, r.Method, r.URL.Path, sw.status,
 			formatBytes(body.n), formatBytes(sw.n), time.Since(start), notes)
+		slog.Info(msg)
 	})
 }
 
@@ -215,10 +242,12 @@ func (n *logNotes) String() string {
 	if len(n.parts) == 0 && !n.recordsSet {
 		return ""
 	}
+	parts := make([]string, 0, len(n.parts)+1)
+	parts = append(parts, n.parts...)
 	if n.recordsSet {
-		n.parts = append(n.parts, fmt.Sprintf("records=%d", n.records))
+		parts = append(parts, fmt.Sprintf("records=%d", n.records))
 	}
-	return " " + strings.Join(n.parts, " ")
+	return " " + strings.Join(parts, " ")
 }
 
 // addLogNote appends "key=value" to the log line of the request.
