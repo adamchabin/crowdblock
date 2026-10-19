@@ -845,6 +845,19 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
+	// Zapisz wynik z powrotem do Redis, żeby kolejne żądania dla tego
+	// samego progu nie trafiały do PostgreSQL (cache backfill).
+	ctx := r.Context()
+	ttl := 5 * listRefreshInterval()
+	if _, err := rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, listKey(minReporters, minutes, "json"), p.plain, ttl)
+		pipe.Set(ctx, listKey(minReporters, minutes, "gz"), p.gz, ttl)
+		pipe.Set(ctx, listKey(minReporters, minutes, "etag"), p.etag, ttl)
+		return nil
+	}); err != nil {
+		slog.Warn("list cache backfill failed", "min_reporters", minReporters, "minutes", minutes, "err", err)
+	}
+
 	writeListPayload(w, r, p)
 }
 
