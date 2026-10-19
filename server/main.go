@@ -131,6 +131,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", handleUI)
 	mux.HandleFunc("GET /api/v1/stats", handleStats)
+	mux.HandleFunc("GET /api/v1/health", handleHealth)
 	mux.HandleFunc("POST /api/v1/register", handleRegister)
 	mux.HandleFunc("POST /api/v1/api-keys", handleCreateAPIKey)
 	mux.HandleFunc("GET /api/v1/api-keys", handleListAPIKeys)
@@ -266,6 +267,35 @@ func setLogRecords(r *http.Request, n int) {
 	}
 }
 
+// handleHealth reports whether the server and its dependencies (Postgres,
+// Redis) are reachable. Returns 200 when everything is up, 503 when a
+// dependency is down, with a JSON body naming the failing service.
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	type health struct {
+		Status  string `json:"status"`
+		Postgres string `json:"postgres"`
+		Redis   string `json:"redis"`
+	}
+
+	h := health{Status: "ok", Postgres: "up", Redis: "up"}
+
+	if err := db.Ping(r.Context()); err != nil {
+		h.Status = "degraded"
+		h.Postgres = "down"
+	}
+
+	if err := rdb.Ping(r.Context()).Err(); err != nil {
+		h.Status = "degraded"
+		h.Redis = "down"
+	}
+
+	if h.Status == "degraded" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(h)
+}
+
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -294,6 +324,38 @@ func (cr *countingReader) Read(b []byte) (int, error) {
 	n, err := cr.ReadCloser.Read(b)
 	cr.n += int64(n)
 	return n, err
+}
+
+// isDBError reports whether err is a database (Postgres) error, so handlers
+// can return 503 Service Unavailable instead of a generic 500.
+func isDBError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// pgx wraps connection/query errors; check the underlying error message
+	// for common Postgres unavailability signals.
+	msg := err.Error()
+	return strings.Contains(msg, "connection") ||
+		strings.Contains(msg, "no connection to the server") ||
+		strings.Contains(msg, "canceling statement") ||
+		strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "context deadline exceeded")
+}
+
+// isRedisError reports whether err is a Redis error.
+func isRedisError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "redis")
+}
+
+// serviceUnavailable writes a 503 response naming the downstream service that
+// failed, so operators can tell at a glance whether Postgres, Redis, or the
+// app itself is at fault.
+func serviceUnavailable(w http.ResponseWriter, service string, err error) {
+	slog.Warn("service unavailable", "service", service, "err", err)
+	http.Error(w, fmt.Sprintf("service unavailable (%s)", service), http.StatusServiceUnavailable)
 }
 
 // formatBytes: 512 -> "512B", 363580 -> "355.1KiB", 5242880 -> "5.0MiB"
@@ -349,6 +411,10 @@ func handleRegister(w http.ResponseWriter, r *http.Request) {
 		req.Email, string(hash),
 	).Scan(&userID)
 	if err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "email already taken or database error", http.StatusConflict)
 		return
 	}
@@ -379,7 +445,7 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 	n, err := rdb.Incr(ctx, ipKey).Result()
 	if err != nil {
 		slog.Warn("redis INCR failed", "key", ipKey, "err", err)
-		http.Error(w, "server error", http.StatusInternalServerError)
+		serviceUnavailable(w, "redis", err)
 		return
 	}
 	if n == 1 {
@@ -405,6 +471,10 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 	const reply = "If the address is valid, an e-mail with the password is on its way."
 	mailKey := "register:mail:" + strings.ToLower(email)
 	if fresh, err := rdb.SetNX(ctx, mailKey, 1, registerCooldown).Result(); err != nil || !fresh {
+		if err != nil && isRedisError(err) {
+			serviceUnavailable(w, "redis", err)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"message": reply})
 		return
 	}
@@ -416,6 +486,10 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows): // already registered: send nothing
 	case err != nil:
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		rdb.Del(ctx, mailKey)
 		slog.Error("register failed", "email", email, "err", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
@@ -455,6 +529,10 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 
 	tx, err := db.Begin(r.Context())
 	if err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -464,6 +542,10 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if err := tx.QueryRow(r.Context(),
 		`SELECT COUNT(*) FROM api_keys WHERE user_id = $1 AND revoked_at IS NULL`, userID,
 	).Scan(&activeCount); err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -483,11 +565,19 @@ func handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO api_keys (user_id, key_prefix, key_hash, name) VALUES ($1, $2, $3, $4) RETURNING id`,
 		userID, keyPrefix, keyHash, req.Name,
 	).Scan(&keyID); err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -546,6 +636,10 @@ func handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, key_prefix, COALESCE(name, ''), created_at FROM api_keys
 		 WHERE user_id = $1 AND revoked_at IS NULL ORDER BY created_at`, userID)
 	if err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -561,12 +655,20 @@ func handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var k keyInfo
 		if err := rows.Scan(&k.ID, &k.Prefix, &k.Name, &k.CreatedAt); err != nil {
+			if isDBError(err) {
+				serviceUnavailable(w, "postgres", err)
+				return
+			}
 			http.Error(w, "server error", http.StatusInternalServerError)
 			return
 		}
 		keys = append(keys, k)
 	}
 	if rows.Err() != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -591,6 +693,10 @@ func handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -612,6 +718,10 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if err := db.QueryRow(r.Context(),
 		`SELECT COALESCE(array_agg(key_hash), '{}') FROM api_keys WHERE user_id = $1`, userID,
 	).Scan(&hashes); err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -627,6 +737,10 @@ func handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := db.Exec(r.Context(), `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
@@ -676,6 +790,10 @@ func handleReportIP(w http.ResponseWriter, r *http.Request) {
 
 	apiKeyID, userID, err := authenticateAPIKey(r.Context(), rawKey)
 	if err != nil {
+		if isDBError(err) || isRedisError(err) {
+			serviceUnavailable(w, "auth", err)
+			return
+		}
 		http.Error(w, "invalid API key", http.StatusUnauthorized)
 		return
 	}
@@ -700,13 +818,24 @@ func handleReportIP(w http.ResponseWriter, r *http.Request) {
 		`INSERT INTO ip_reports (ip, api_key_id, user_id, source) VALUES ($1, $2, $3, NULLIF($4, ''))`,
 		req.IP, apiKeyID, userID, req.Source,
 	); err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		http.Error(w, "invalid IP address or database error", http.StatusBadRequest)
 		return
 	}
 
 	blacklisted, err := maybeBlacklist(r.Context(), req.IP, userID)
 	if err != nil {
-		slog.Warn("blacklist aggregation failed", "ip", req.IP, "err", err)
+		if isRedisError(err) {
+			slog.Warn("redis unavailable, proceeding without blacklist", "ip", req.IP, "err", err)
+		} else if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		} else {
+			slog.Warn("blacklist aggregation failed", "ip", req.IP, "err", err)
+		}
 	}
 
 	debugf("report %s source=%q by user %s (key %s)", req.IP, req.Source, userID, apiKeyID)
@@ -736,6 +865,12 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 		}
 	} else if cacheErr != redis.Nil {
 		slog.Warn("redis GET failed", "key", cacheKey, "err", cacheErr)
+		// If Redis is down and Postgres is also unreachable, return 503.
+		if isRedisError(cacheErr) {
+			if dbPingErr := db.Ping(ctx); dbPingErr != nil && isDBError(dbPingErr) {
+				return "", "", fmt.Errorf("redis and postgres unavailable: %w", cacheErr)
+			}
+		}
 	}
 
 	keyMisses.Add(1)
@@ -743,6 +878,9 @@ func authenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 		`SELECT id, user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL`, hash,
 	).Scan(&apiKeyID, &userID)
 	if err != nil {
+		if isDBError(err) {
+			return "", "", fmt.Errorf("postgres unavailable: %w", err)
+		}
 		debugf("api key %s…: invalid or revoked", rawKey[:min(len(rawKey), 8)])
 		return "", "", errors.New("key invalid or revoked")
 	}
@@ -841,6 +979,10 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, _, err := authenticateAPIKey(r.Context(), rawKey); err != nil {
+		if isDBError(err) || isRedisError(err) {
+			serviceUnavailable(w, "auth", err)
+			return
+		}
 		http.Error(w, "invalid API key", http.StatusUnauthorized)
 		return
 	}
@@ -864,6 +1006,10 @@ func handleListIPs(w http.ResponseWriter, r *http.Request) {
 	debugf("list %d/%d: not in Redis, computing from PostgreSQL", minReporters, minutes)
 	result, err := queryIPList(r.Context(), minutes, minReporters)
 	if err != nil {
+		if isDBError(err) {
+			serviceUnavailable(w, "postgres", err)
+			return
+		}
 		slog.Error("list query failed", "err", err)
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
