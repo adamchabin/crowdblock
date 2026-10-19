@@ -135,6 +135,10 @@ return view.extend({
 			_('Addresses and networks that are never blocked. Private ranges and the router\'s own addresses are whitelisted automatically.'));
 		o.datatype = 'ipaddr';
 
+		o = s.taboption('advanced', form.DynamicList, 'static_block', _('Static blocklist'),
+			_('Addresses that are always blocked, independently of the server. Added with the configured block_time on every sync.'));
+		o.datatype = 'ipaddr';
+
 		return m.render();
 	}
 });

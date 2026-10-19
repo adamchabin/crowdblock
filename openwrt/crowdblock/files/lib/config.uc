@@ -51,6 +51,7 @@ function load() {
 		return { error: "missing section 'main' in /etc/config/crowdblock" };
 
 	let wl = s.whitelist ?? [];
+	let sb = s.static_block ?? [];
 
 	let cfg = {
 		server:        rtrim(s.server ?? '', '/'),
@@ -65,6 +66,7 @@ function load() {
 		verify_tls:    bool_opt(s.verify_tls, true),
 		debug:         bool_opt(s.debug, false),
 		whitelist:     (type(wl) == 'array') ? wl : [ wl ],
+		static_block:  (type(sb) == 'array') ? sb : [ sb ],
 	};
 
 	if (!match(cfg.server, /^https?:\/\/[^\s'"]+$/))
@@ -82,6 +84,19 @@ function load() {
 
 	if (!(cfg.report_window in REPORT_WINDOWS))
 		return { error: 'option report_window must be one of 1h, 6h, 24h, 7d' };
+
+	// Each static_block entry must be a valid IP address or CIDR.
+	for (let e in cfg.static_block) {
+		let v = trim('' + cfg.static_block[e]);
+		if (v == '')
+			continue;
+		let addr = v;
+		let slash = index(v, '/');
+		if (slash >= 0)
+			addr = slice(v, 0, slash);
+		if (!iptoarr(addr))
+			return { error: `option static_block contains invalid address: ${v}` };
+	}
 
 	// A block must outlive the next sync (with room for one failed sync),
 	// otherwise listed addresses are unblocked between syncs.

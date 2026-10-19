@@ -280,6 +280,36 @@ function merge(cfg, st, wl, now) {
 		}
 	});
 
+	// Static blocklist: addresses from /etc/config/crowdblock that are
+	// always blocked, independently of the server.
+	for (let e in cfg.static_block) {
+		let v = trim('' + cfg.static_block[e]);
+		if (v == '')
+			continue;
+		if (index(v, '/') >= 0)
+			continue; // CIDR not yet supported in static blocklist
+		let bytes = iptoarr(v);
+		if (!bytes)
+			continue;
+		let ip = arrtoip(bytes);
+		if (whitelisted(wl, bytes))
+			continue;
+		if (exists(st.entries, ip)) {
+			st.entries[ip] = now + cfg.block_time;
+			stats.refreshed++;
+		}
+		else if (count < cfg.max_entries) {
+			st.entries[ip] = now + cfg.block_time;
+			stats.added++;
+			push(seen.added, ip);
+			count++;
+		}
+		else {
+			stats.full++;
+			push(seen.full, ip);
+		}
+	}
+
 	debug(cfg, 'merge: %d on the list: %d new, %d refreshed, %d whitelisted, %d below min_reports, %d invalid, %d over max_entries',
 		stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full,
 		stats.added, stats.refreshed, stats.whitelisted, stats.below, stats.invalid, stats.full);
