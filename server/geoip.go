@@ -7,15 +7,15 @@ import (
 	maxminddb "github.com/oschwald/maxminddb-golang"
 )
 
-// GeoDBReader definiuje interfejs potrzebny do wyszukiwania adresów IP,
-// co umożliwia testowanie (mockowanie) w modułach biznesowych.
+// GeoDBReader defines the interface needed for IP address lookups,
+// enabling testing (mocking) in business logic modules.
 type GeoDBReader interface {
-	// Lookup wyszukuje kod ISO i angielską nazwę kraju dla danego IP.
-	// Zwraca ("", "") w przypadku niepowodzenia.
+	// Lookup finds the ISO code and English country name for the given IP.
+	// Returns ("", "", error) on failure.
 	Lookup(addr netip.Addr) (isoCode, name string, err error)
 }
 
-// globalny czytnik, który będzie ustawiany po zakończeniu inicjalizacji.
+// Global reader, set after initialization completes.
 var geoDB GeoDBReader
 
 // RealGeoDBReader wraps maxminddb.Reader.
@@ -36,7 +36,7 @@ func (r *RealGeoDBReader) Lookup(addr netip.Addr) (isoCode, name string, err err
 	return result.Country.ISOCode, result.Country.Names["en"], nil
 }
 
-// openGeoIP inicjalizuje globalny czytnik bazy danych przy użyciu podanego pliku.
+// openGeoIP initializes the global database reader using the given file.
 func openGeoIP(dbPath string) error {
 	db, err := maxminddb.Open(dbPath)
 	if err != nil {
@@ -50,7 +50,7 @@ func openGeoIP(dbPath string) error {
 // countryOf returns the ISO 3166-1 alpha-2 code and the English country name
 // for the address, or ("Unknown", "Unknown") when the lookup fails.
 func countryOf(addr netip.Addr, reader GeoDBReader) (code, name string) {
-	// 1. Lookup bazy danych za pomocą przekazanego czytnika
+	// 1. Lookup database using the provided reader
 	isoCode, name, err := reader.Lookup(addr)
 
 	if err != nil || isoCode == "" {

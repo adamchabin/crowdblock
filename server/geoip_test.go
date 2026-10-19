@@ -12,8 +12,8 @@ import (
 	maxminddb "github.com/oschwald/maxminddb-golang"
 )
 
-// Testy jednostkowe skupiają się na logice wywołania, a nie na faktycznym piśmiennictwie bazy danych,
-// dzięki użyciu MockGeoDBReader.
+// Unit tests focus on call logic, not on actual database I/O,
+// by using MockGeoDBReader.
 
 // MockGeoDBReader is a test fake of GeoDBReader with canned ISO codes and names
 // matching the addresses used in the tests below.
@@ -34,56 +34,57 @@ func (m *MockGeoDBReader) Lookup(addr netip.Addr) (string, string, error) {
 }
 
 func TestCountryOf_Success(t *testing.T) {
-	// Case 1: USA (znany adres)
+	// Case 1: USA (known address)
 	mockReader := &MockGeoDBReader{}
 	addrUS, _ := netip.ParseAddr("192.0.2.1")
 	code, name := countryOf(addrUS, mockReader)
 	if code != "US" || name != "United States" {
-		t.Errorf("Oczekiwano ('US', 'United States'), otrzymano ('%s', '%s')", code, name)
+		t.Errorf("Expected ('US', 'United States'), got ('%s', '%s')", code, name)
 	}
 
-	// Case 2: Polska (znany adres)
+	// Case 2: Poland (known address)
 	addrPL, _ := netip.ParseAddr("88.99.10.10")
 	code, name = countryOf(addrPL, mockReader)
 	if code != "PL" || name != "Poland" {
-		t.Errorf("Oczekiwano ('PL', 'Poland'), otrzymano ('%s', '%s')", code, name)
+		t.Errorf("Expected ('PL', 'Poland'), got ('%s', '%s')", code, name)
 	}
 
-	// Case 3: Singapur (znany adres)
+	// Case 3: Singapore (known address)
 	addrSG, _ := netip.ParseAddr("203.0.113.42")
 	code, name = countryOf(addrSG, mockReader)
 	if code != "SG" || name != "Singapore" {
-		t.Errorf("Oczekiwano ('SG', 'Singapore'), otrzymano ('%s', '%s')", code, name)
+		t.Errorf("Expected ('SG', 'Singapore'), got ('%s', '%s')", code, name)
 	}
 }
 
 func TestCountryOf_FailureHandling(t *testing.T) {
 	mockReader := &MockGeoDBReader{}
 
-	// Case 1: Nieznany IP (mock zwróci pusty kod)
+	// Case 1: Unknown IP (mock returns empty code)
 	addrUnknown, _ := netip.ParseAddr("99.99.99.99")
 	code, name := countryOf(addrUnknown, mockReader)
 	if code != "Unknown" || name != "Unknown" {
-		t.Errorf("Oczekiwano ('Unknown', 'Unknown') dla nieznanego IP, otrzymano: ('%s', '%s')", code, name)
+		t.Errorf("Expected ('Unknown', 'Unknown') for unknown IP, got: ('%s', '%s')", code, name)
 	}
 }
 
 func TestCountryOf_InvalidInput(t *testing.T) {
-	// Testowanie przypadku, gdy adres IP jest wadliwie sformatowany
-	// Zakładamy, że `netip.ParseAddr` obsłuży to błędem, ale testujemy logikę fallbacku.
-	// Jeśli przekazane są błędy, funkcja powinna bezpiecznie wrócić pustym stringiem.
+	// Test case where IP address is malformed
+	// We assume `netip.ParseAddr` handles this with an error, but we test fallback logic.
+	// If errors are passed, the function should safely return empty string.
 
-	// W tym celu musimy symulować błąd na wejściu, co wymagałoby zmiany sygnatury.
-	// Dla uproszczenia testujemy adres, zakładając, że MockGeoDBReader go obsłuży jako błąd.
+	// To do this we would need to simulate an input error, which would require
+	// changing the function signature. For simplicity we test an address
+	// assuming MockGeoDBReader treats it as an error.
 
-	// Symulacja błędu (najlepsze byłoby przekazanie wskaźnika o błędzie, ale zrezygnowano z kompleksowości)
-	// Jeśli mock zwróci błąd, nasze testy zakładają, że to skutkuje powrotem ""
+	// Error simulation (ideally would pass an error pointer, but we skipped complexity)
+	// If mock returns an error, our tests assume it results in returning ""
 	t.Run("Simulation of read failure", func(t *testing.T) {
-		// Testowanie błędu (musiałby to zrobić mockReader)
-		// Ponieważ MockGeoDBReader zdefiniował, że zawsze wraca string i nie może zwracać error,
-		// ten test jest symbolicznym potwierdzeniem przyjętej polityki błędów.
-		// Jeśli kiedykolwiek dodamy logikę symulacji błędnego lutowania, test ma się poprawnie zachować.
-		t.Skip("Symulacja złego odczytu wymagałaby modyfikacji MockGeoDBReader.Zaplanowano.")
+		// Error testing (would need mockReader)
+		// Since MockGeoDBReader is defined to always return string and not error,
+		// this test is a symbolic confirmation of the adopted error policy.
+		// If we ever add logic for simulating bad lookups, the test should behave correctly.
+		t.Skip("Simulating bad read would require modifying MockGeoDBReader. Planned.")
 	})
 }
 
