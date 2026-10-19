@@ -347,7 +347,8 @@ func isRedisError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "redis")
+	// Case-insensitive check for "redis" in the error message
+	return strings.Contains(strings.ToLower(err.Error()), "redis")
 }
 
 // serviceUnavailable writes a 503 response naming the downstream service that

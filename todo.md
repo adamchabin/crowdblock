@@ -6,9 +6,9 @@
 - [x] Raised CI/CD security level by adding dependency auditing to `server/Dockerfile`.
 
 ## 🛠️ To Address (For Refactoring/Optimization)
-- [ ] **main.go:** Improve HTTP context management in logs and API logic to ensure full resource isolation between requests.
-- [ ] **geoip.go / main.go:** Must address race conditions and improve locking mechanisms for critical shared resources (e.g., global `geoDB` or logging to Redis).
-- [ ] **main.go / geoip.go:** Enhance external service failure notification mechanisms (e.g., if Postgres/Redis is unavailable, we should return a more detailed HTTP status than just a general "server error").
+- [x] **main.go:** Improve HTTP context management in logs and API logic to ensure full resource isolation between requests. *(commit 789e507)*
+- [x] **geoip.go / main.go:** Must address race conditions and improve locking mechanisms for critical shared resources (e.g., global `geoDB` or logging to Redis). — *Analyzed, no issues found; `geoDB` is immutable after init, `pgxpool`/`redis.Client` are thread-safe, atomics/mutexes used correctly.*
+- [x] **main.go / geoip.go:** Enhance external service failure notification mechanisms (e.g., if Postgres/Redis is unavailable, we should return a more detailed HTTP status than just a general "server error"). *(commit e79cd50 — `isDBError`, `isRedisError`, `serviceUnavailable`, `handleHealth` endpoint, 503 instead of 500)*
 
 ## 🧪 To Implement (Next Task)
 - [ ] **Unit Tests:** Write a complete suite of tests for the `geoip.go` and `main.go` modules to ensure code coverage and business logic correctness.
