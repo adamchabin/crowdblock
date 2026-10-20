@@ -30,29 +30,34 @@ func (m *mockGeoDB) Lookup(addr netip.Addr) (string, string, error) {
 	}
 }
 
-// The integration tests need a real PostgreSQL and Redis; they are skipped
-// when the packages are not connected. Set DATABASE_URL and REDIS_ADDR to
-// run them: go test -run TestIntegration ./...
+// dbAvailable tells whether the integration tests can run: the database and
+// Redis must be reachable.
+var dbAvailable bool
+
+// The integration tests need a real PostgreSQL and Redis. They are skipped
+// when the database is not reachable, so that the unit tests of this package
+// still run everywhere. Set DATABASE_URL and REDIS_ADDR to run them:
+//
+//	DATABASE_URL=postgres://... REDIS_ADDR=localhost:6379 go test -run TestIntegration ./internal/api/...
 func TestMain(m *testing.M) {
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		ctx := context.Background()
 		if err := db.Connect(ctx, dsn, os.Getenv("REDIS_ADDR")); err != nil {
-			fmt.Fprintln(os.Stderr, "cannot connect to the database:", err)
-			os.Exit(1)
+			fmt.Fprintln(os.Stderr, "skipping the integration tests:", err)
+		} else if err := db.EnsureSchema(ctx, db.DB); err != nil {
+			fmt.Fprintln(os.Stderr, "skipping the integration tests:", err)
+		} else {
+			dbAvailable = true
+			defer db.Close()
 		}
-		if err := db.EnsureSchema(ctx, db.DB); err != nil {
-			fmt.Fprintln(os.Stderr, "cannot apply the schema:", err)
-			os.Exit(1)
-		}
-		defer db.Close()
 	}
 	os.Exit(m.Run())
 }
 
 func requireDB(t *testing.T) {
 	t.Helper()
-	if db.DB == nil || db.RDB == nil {
-		t.Skip("database not initialized, skipping integration test")
+	if !dbAvailable {
+		t.Skip("no database available, skipping the integration test")
 	}
 }
 

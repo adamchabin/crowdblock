@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"server/internal/db"
 )
 
 func TestMiddleware_Recovery(t *testing.T) {
@@ -95,10 +93,9 @@ func TestAPIKeyFromRequest(t *testing.T) {
 }
 
 func TestHandleHealth(t *testing.T) {
-	// The health endpoint needs a database and Redis; without them the
-	// handler would panic, so skip when they are not configured.
-	if db.DB == nil || db.RDB == nil {
-		t.Skip("database not initialized, skipping health check test")
+	// The health endpoint needs a reachable database and Redis.
+	if !dbAvailable {
+		t.Skip("no database available, skipping the health check test")
 	}
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
