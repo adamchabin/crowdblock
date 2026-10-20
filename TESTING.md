@@ -118,6 +118,12 @@ cd server
 # Functional tests (verify response bodies, not just status codes)
 ./run-tests.sh --functional
 
+# 1000 clients reporting addresses (2min)
+./run-tests.sh --clients
+
+# 10000 clients downloading the list (1min, ~167 req/s)
+./run-tests.sh --readers
+
 # Stop and remove containers + volumes
 ./run-tests.sh --cleanup
 ```

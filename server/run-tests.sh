@@ -172,6 +172,9 @@ run_k6() {
             -e WRITE_RATE="$WRITE_RATE" \
             -e ACCOUNT_RATE="${ACCOUNT_RATE:-1}" \
             -e USERS="$USERS" \
+            -e RATE="${RATE:-100}" \
+            -e VUS="${VUS:-50}" \
+            -e MAX_VUS="${MAX_VUS:-200}" \
             grafana/k6 run "/k6/$script" "$@"
     else
         echo "Running k6 locally..."
@@ -181,6 +184,9 @@ run_k6() {
         WRITE_RATE="$WRITE_RATE" \
         ACCOUNT_RATE="${ACCOUNT_RATE:-1}" \
         USERS="$USERS" \
+        RATE="${RATE:-100}" \
+        VUS="${VUS:-50}" \
+        MAX_VUS="${MAX_VUS:-200}" \
         k6 run "$SCRIPT_DIR/k6/$script" "$@"
     fi
 }
@@ -203,6 +209,14 @@ run_tests() {
         functional)
             echo "=== Running Functional Tests ==="
             run_k6 "functional.js"
+            ;;
+        clients)
+            echo "=== Running 1000-Client Test ==="
+            run_k6 "thousand-clients.js"
+            ;;
+        readers)
+            echo "=== Running 10000-Reader Test ==="
+            run_k6 "ten-thousand-readers.js"
             ;;
         *)
             echo "Unknown mode: $MODE" >&2

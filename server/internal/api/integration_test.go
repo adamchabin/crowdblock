@@ -242,6 +242,51 @@ func TestIntegration_ReportInvalidIP(t *testing.T) {
 	}
 }
 
+func TestIntegration_ListTierIsolation(t *testing.T) {
+	requireDB(t)
+	cleanupTestData(t)
+	t.Cleanup(func() { cleanupTestData(t) })
+
+	_, apiKey := testUser(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Seed two tiers with distinct payloads straight in Redis.
+	tiers := map[int]string{
+		1: `[{"ip":"203.0.113.91","distinct_reporters":7}]`,
+		5: `[{"ip":"203.0.113.92","distinct_reporters":9}]`,
+	}
+	for min, body := range tiers {
+		if err := db.RDB.Set(ctx, fmt.Sprintf("ips:%d:60:json", min), body, time.Minute).Err(); err != nil {
+			t.Fatalf("seed tier %d json: %v", min, err)
+		}
+		if err := db.RDB.Set(ctx, fmt.Sprintf("ips:%d:60:etag", min), fmt.Sprintf(`"tier-%d-etag"`, min), time.Minute).Err(); err != nil {
+			t.Fatalf("seed tier %d etag: %v", min, err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		db.RDB.Del(ctx, "ips:1:60:json", "ips:1:60:etag", "ips:5:60:json", "ips:5:60:etag")
+	})
+
+	// Each tier must serve its own payload, not the other tier's.
+	for min, want := range tiers {
+		r := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/api/v1/ips?min_reporters=%d&minutes=60", min), nil)
+		r.Header.Set("X-API-Key", apiKey)
+		w := httptest.NewRecorder()
+		HandleListIPs(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("tier %d: status = %d, want 200", min, w.Code)
+		}
+		if w.Body.String() != want {
+			t.Errorf("tier %d: body = %s, want %s", min, w.Body.String(), want)
+		}
+	}
+}
+
 func TestIntegration_GeoIPBatch(t *testing.T) {
 	old := geoip.GeoDB
 	geoip.GeoDB = &mockGeoDB{}

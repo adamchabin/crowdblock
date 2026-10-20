@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -65,6 +66,27 @@ func TestBuildLists(t *testing.T) {
 	empty, _ := buildLists(nil)
 	if got := string(empty[1].plain); got != "[]\n" {
 		t.Errorf("empty list = %q", got)
+	}
+}
+
+func TestListKeyUniqueness(t *testing.T) {
+	// Every (min_reporters, minutes, kind) combination must have its own
+	// Redis key, otherwise one tier would serve another tier's list.
+	seen := map[string]string{}
+	for _, minutes := range AllowedMinutes {
+		for _, min := range AllowedMinReporters {
+			for _, kind := range []string{"json", "gz", "etag"} {
+				k := listKey(min, minutes, kind)
+				label := fmt.Sprintf("%d/%d/%s", min, minutes, kind)
+				if prev, ok := seen[k]; ok {
+					t.Errorf("key %q shared by %s and %s", k, prev, label)
+				}
+				seen[k] = label
+			}
+		}
+	}
+	if n := len(seen); n != len(AllowedMinutes)*len(AllowedMinReporters)*3 {
+		t.Errorf("%d keys, want %d", n, len(AllowedMinutes)*len(AllowedMinReporters)*3)
 	}
 }
 
