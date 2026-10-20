@@ -57,7 +57,7 @@ running the OpenWrt client. Fine as a prototype; not ready at that scale.
 
 Done as below, with the client's ETag (`If-None-Match` + `?delta=1`) instead
 of a version number – the client already has it and `uclient-fetch` can't
-read response headers. Server: `server/delta.go`; client:
+read response headers. Server: `server/internal/list/delta.go`; client:
 `openwrt/crowdblock/files/lib/api.uc`.
 
 - Each generation gets a version number. For every combination the server

@@ -1,4 +1,4 @@
-package main
+package list
 
 import (
 	"bytes"
@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"server/internal/db"
+	"server/internal/logging"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -43,18 +46,13 @@ import (
 // version. Anything unusual – unknown etag, missing diffs, a delta bigger than
 // half the list – falls back to the full list.
 
-const (
-	listHistory      = 60 // generations kept for deltas (1 h at LIST_REFRESH=1m)
-	listVersionKey   = "ips:version"
-	maxDeltaFraction = 2 // a delta larger than count/2 is sent as the full list
-)
-
 // listDiff is the change between two generations of one list.
 type listDiff struct {
-	Upsert []ipListEntry `json:"upsert"`
-	Remove []string      `json:"remove"`
+	Upsert []db.IPListEntry `json:"upsert"`
+	Remove []string         `json:"remove"`
 }
 
+// listMeta describes one generation of a list.
 type listMeta struct {
 	Version int64  `json:"version"`
 	Count   int    `json:"count"`
@@ -64,7 +62,7 @@ type listMeta struct {
 // setHash identifies the set of addresses of a list, independently of order
 // and of the other fields: the first 16 hex digits of the SHA-256 of the
 // sorted addresses, each followed by "\n". Clients compute it the same way.
-func setHash(entries []ipListEntry) string {
+func setHash(entries []db.IPListEntry) string {
 	ips := make([]string, len(entries))
 	for i, e := range entries {
 		ips[i] = e.IP
@@ -80,13 +78,13 @@ func setHash(entries []ipListEntry) string {
 }
 
 // computeDiff returns the changes turning prev into cur.
-func computeDiff(prev, cur []ipListEntry) listDiff {
-	old := make(map[string]ipListEntry, len(prev))
+func computeDiff(prev, cur []db.IPListEntry) listDiff {
+	old := make(map[string]db.IPListEntry, len(prev))
 	for _, e := range prev {
 		old[e.IP] = e
 	}
 
-	d := listDiff{Upsert: []ipListEntry{}, Remove: []string{}}
+	d := listDiff{Upsert: []db.IPListEntry{}, Remove: []string{}}
 	for _, e := range cur {
 		if o, ok := old[e.IP]; !ok || !reflect.DeepEqual(normalized(o), normalized(e)) {
 			d.Upsert = append(d.Upsert, e)
@@ -102,7 +100,7 @@ func computeDiff(prev, cur []ipListEntry) listDiff {
 
 // normalized treats a missing and an empty source list as equal (JSON
 // round trips turn one into the other).
-func normalized(e ipListEntry) ipListEntry {
+func normalized(e db.IPListEntry) db.IPListEntry {
 	if len(e.Sources) == 0 {
 		e.Sources = nil
 	}
@@ -111,7 +109,7 @@ func normalized(e ipListEntry) ipListEntry {
 
 // mergeDiffs combines consecutive diffs (oldest first) into one.
 func mergeDiffs(diffs []listDiff) listDiff {
-	upsert := map[string]ipListEntry{}
+	upsert := map[string]db.IPListEntry{}
 	remove := map[string]bool{}
 
 	for _, d := range diffs {
@@ -125,7 +123,7 @@ func mergeDiffs(diffs []listDiff) listDiff {
 		}
 	}
 
-	m := listDiff{Upsert: []ipListEntry{}, Remove: []string{}}
+	m := listDiff{Upsert: []db.IPListEntry{}, Remove: []string{}}
 	for _, e := range upsert {
 		m.Upsert = append(m.Upsert, e)
 	}
@@ -134,7 +132,7 @@ func mergeDiffs(diffs []listDiff) listDiff {
 	}
 	// Most reported first, like the full list (the client keeps the first
 	// max_entries).
-	slices.SortFunc(m.Upsert, func(a, b ipListEntry) int {
+	slices.SortFunc(m.Upsert, func(a, b db.IPListEntry) int {
 		if a.DistinctReporters != b.DistinctReporters {
 			return b.DistinctReporters - a.DistinctReporters
 		}
@@ -174,6 +172,7 @@ func encodeDelta(etag string, meta listMeta, d listDiff) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// gzipBytes compresses data with gzip.
 func gzipBytes(data []byte) ([]byte, error) {
 	var b bytes.Buffer
 	zw := gzip.NewWriter(&b)
@@ -189,7 +188,7 @@ func gzipBytes(data []byte) ([]byte, error) {
 // storeDeltaData queues, for one list of a new generation, its meta, its etag
 // in the history and (if the previous list is known) its diff.
 func storeDeltaData(ctx context.Context, pipe redis.Pipeliner, minReporters, minutes int,
-	version int64, etag string, prev, cur []ipListEntry, prevKnown bool, interval time.Duration) error {
+	version int64, etag string, prev, cur []db.IPListEntry, prevKnown bool, interval time.Duration) error {
 
 	meta, err := json.Marshal(listMeta{Version: version, Count: len(cur), SetHash: setHash(cur)})
 	if err != nil {
@@ -217,25 +216,25 @@ func storeDeltaData(ctx context.Context, pipe redis.Pipeliner, minReporters, min
 // serveDelta sends the changes since the client's copy (etag `have`) and
 // returns true, or returns false (nothing written) when the full list must be
 // sent instead.
-func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes int, have, current string) bool {
+func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes int, have, current string) (Meta, bool) {
 	ctx := r.Context()
 
-	start, err := rdb.ZScore(ctx, listKey(minReporters, minutes, "etags"), have).Result()
+	start, err := db.RDB.ZScore(ctx, listKey(minReporters, minutes, "etags"), have).Result()
 	if err != nil {
-		debugf("delta %d/%d: client etag %s not in the history (%v), full list", minReporters, minutes, have, err)
-		return false // unknown or too old etag (or Redis error)
+		logging.Debugf("delta %d/%d: client etag %s not in the history (%v), full list", minReporters, minutes, have, err)
+		return Meta{}, false // unknown or too old etag (or Redis error)
 	}
 	from := int64(start)
 
-	metaJSON, err := rdb.Get(ctx, listKey(minReporters, minutes, "meta")).Bytes()
+	metaJSON, err := db.RDB.Get(ctx, listKey(minReporters, minutes, "meta")).Bytes()
 	if err != nil {
-		debugf("delta %d/%d: no meta in Redis (%v), full list", minReporters, minutes, err)
-		return false
+		logging.Debugf("delta %d/%d: no meta in Redis (%v), full list", minReporters, minutes, err)
+		return Meta{}, false
 	}
 	var meta listMeta
 	if json.Unmarshal(metaJSON, &meta) != nil || from >= meta.Version || meta.Version-from > listHistory {
-		debugf("delta %d/%d: client at version %d, current %d: out of range, full list", minReporters, minutes, from, meta.Version)
-		return false
+		logging.Debugf("delta %d/%d: client at version %d, current %d: out of range, full list", minReporters, minutes, from, meta.Version)
+		return Meta{}, false
 	}
 
 	gzipped := acceptsGzip(r)
@@ -247,26 +246,22 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 
 	// Cached per (start, current) version: many routers share a start
 	// version. An empty value caches the decision to send the full list.
-	body, err := rdb.Get(ctx, cacheKey).Bytes()
+	body, err := db.RDB.Get(ctx, cacheKey).Bytes()
 	if err != nil {
 		body, err = buildDelta(ctx, minReporters, minutes, from, current, meta, gzipped)
 		if err != nil {
-			debugf("delta %d/%d: %d -> %d failed: %v, full list", minReporters, minutes, from, meta.Version, err)
-			return false
+			logging.Debugf("delta %d/%d: %d -> %d failed: %v, full list", minReporters, minutes, from, meta.Version, err)
+			return Meta{}, false
 		}
-		_ = rdb.Set(ctx, cacheKey, body, 2*listRefreshInterval()).Err()
-		debugf("delta %d/%d: %d -> %d built and cached (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
+		_ = db.RDB.Set(ctx, cacheKey, body, 2*listRefreshInterval()).Err()
+		logging.Debugf("delta %d/%d: %d -> %d built and cached (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
 	} else {
-		debugf("delta %d/%d: %d -> %d from cache (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
+		logging.Debugf("delta %d/%d: %d -> %d from cache (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
 	}
 	if len(body) == 0 {
-		debugf("delta %d/%d: %d -> %d not worth it, full list", minReporters, minutes, from, meta.Version)
-		return false
+		logging.Debugf("delta %d/%d: %d -> %d not worth it, full list", minReporters, minutes, from, meta.Version)
+		return Meta{}, false
 	}
-
-	addLogNote(r, "list", "diff")
-	setLogRecords(r, bytes.Count(body, []byte("\"ip\":")))
-	addLogNote(r, "enc", map[bool]string{true: "gzip", false: "plain"}[gzipped])
 
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
@@ -278,7 +273,12 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
-	return true
+
+	return Meta{
+		Kind:     "diff",
+		Encoding: map[bool]string{true: "gzip", false: "plain"}[gzipped],
+		Records:  bytes.Count(body, []byte(`"ip":`)),
+	}, true
 }
 
 // buildDelta merges the diffs from generation `from` to meta.Version. Returns
@@ -291,7 +291,7 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 	for v := from + 1; v <= meta.Version; v++ {
 		keys = append(keys, listKey(minReporters, minutes, "diff:"+strconv.FormatInt(v, 10)))
 	}
-	vals, err := rdb.MGet(ctx, keys...).Result()
+	vals, err := db.RDB.MGet(ctx, keys...).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -300,14 +300,14 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 	for i, v := range vals {
 		s, ok := v.(string)
 		if !ok || json.Unmarshal([]byte(s), &diffs[i]) != nil {
-			debugf("delta %d/%d: diff of version %d missing", minReporters, minutes, from+1+int64(i))
+			logging.Debugf("delta %d/%d: diff of version %d missing", minReporters, minutes, from+1+int64(i))
 			return nil, nil // history incomplete
 		}
 	}
 
 	d := mergeDiffs(diffs)
 	if meta.Count > 0 && (len(d.Upsert)+len(d.Remove))*maxDeltaFraction > meta.Count {
-		debugf("delta %d/%d: %d changes for %d addresses, more than 1/%d", minReporters, minutes,
+		logging.Debugf("delta %d/%d: %d changes for %d addresses, more than 1/%d", minReporters, minutes,
 			len(d.Upsert)+len(d.Remove), meta.Count, maxDeltaFraction)
 		return nil, nil
 	}

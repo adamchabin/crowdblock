@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"crypto/rand"
@@ -11,6 +11,8 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
+
+	"server/internal/logging"
 )
 
 // SMTP settings (all from the environment; the "register by e-mail" flow is
@@ -24,7 +26,12 @@ import (
 // The server always authenticates (AUTH PLAIN) and, except to localhost,
 // only over STARTTLS: the password is never sent unencrypted.
 // shortcut: implicit TLS (port 465) is not supported, use 587 + STARTTLS.
+
+// smtpConfigured returns true when all four SMTP variables are set.
 func smtpConfigured() bool { return len(smtpMissing()) == 0 }
+
+// SMTPMissing lists the unset SMTP_* variables (names only, never values).
+func SMTPMissing() []string { return smtpMissing() }
 
 // smtpMissing lists the unset SMTP_* variables (names only, never values).
 func smtpMissing() (missing []string) {
@@ -62,6 +69,7 @@ func generatePassword() (string, error) {
 	return string(b), nil
 }
 
+// sendPasswordMail sends the account password to the given address.
 func sendPasswordMail(to, password string) error {
 	if !smtpConfigured() {
 		return errors.New("SMTP not configured (SMTP_FROM, SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD)")
@@ -79,7 +87,7 @@ func sendPasswordMail(to, password string) error {
 		"If this wasn't you, ignore this message: nobody can use the account without the password.\r\n",
 		from, to, to, password)
 
-	debugf("smtp: sending password mail to %s via %s as %s", to, addr, os.Getenv("SMTP_USERNAME"))
+	logging.Debugf("smtp: sending password mail to %s via %s as %s", to, addr, os.Getenv("SMTP_USERNAME"))
 	c, err := smtp.Dial(addr)
 	if err != nil {
 		return fmt.Errorf("connect %s: %w", addr, err)
@@ -90,7 +98,7 @@ func sendPasswordMail(to, password string) error {
 	}
 	hasTLS, _ := c.Extension("STARTTLS")
 	hasAuth, authMechs := c.Extension("AUTH")
-	debugf("smtp: connected to %s, STARTTLS offered=%v, AUTH offered (before TLS)=%v %s", addr, hasTLS, hasAuth, authMechs)
+	logging.Debugf("smtp: connected to %s, STARTTLS offered=%v, AUTH offered (before TLS)=%v %s", addr, hasTLS, hasAuth, authMechs)
 	if ok, _ := c.Extension("STARTTLS"); ok {
 		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 			return fmt.Errorf("STARTTLS: %w", err)
@@ -104,7 +112,7 @@ func sendPasswordMail(to, password string) error {
 	if err := c.Auth(smtp.PlainAuth("", os.Getenv("SMTP_USERNAME"), os.Getenv("SMTP_PASSWORD"), host)); err != nil {
 		return fmt.Errorf("AUTH as %s: %w", os.Getenv("SMTP_USERNAME"), err)
 	}
-	debugf("smtp: authenticated as %s", os.Getenv("SMTP_USERNAME"))
+	logging.Debugf("smtp: authenticated as %s", os.Getenv("SMTP_USERNAME"))
 	if err := c.Mail(from); err != nil {
 		return fmt.Errorf("MAIL FROM: %w", err)
 	}
@@ -121,6 +129,6 @@ func sendPasswordMail(to, password string) error {
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("DATA: %w", err)
 	}
-	debugf("smtp: mail to %s accepted by %s", to, addr)
+	logging.Debugf("smtp: mail to %s accepted by %s", to, addr)
 	return c.Quit()
 }

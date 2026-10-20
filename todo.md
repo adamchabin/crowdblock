@@ -2,7 +2,7 @@
 
 ## 🚧 Implemented / Completed (Ready for Verification)
 - [x] Improved UI rendering in `server/ui.html` (Full-screen view).
-- [x] Extended country mapping in `server/geoip.go` by dozens of countries (SG, AD, GB, and others).
+- [x] Extended country mapping in `server/internal/geoip/geoip.go` by dozens of countries (SG, AD, GB, and others).
 - [x] Raised CI/CD security level by adding dependency auditing to `server/Dockerfile`.
 
 ## 🛠️ To Address (For Refactoring/Optimization)

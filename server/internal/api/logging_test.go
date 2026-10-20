@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ func TestLogRequestsSizes(t *testing.T) {
 	log.SetOutput(&out)
 	defer log.SetOutput(io.Discard)
 
-	h := logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := LogRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusCreated)
 		w.Write(bytes.Repeat([]byte("x"), 2048))
@@ -48,36 +48,43 @@ func TestLogNotesForLists(t *testing.T) {
 	log.SetOutput(&out)
 	defer log.SetOutput(io.Discard)
 
-	p, _ := newListPayload([]ipListEntry{{IP: "1.2.3.4", DistinctReporters: 3}})
-	h := logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeListPayload(w, r, p)
+	h := LogRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		addLogNote(r, "list", "full")
+		addLogNote(r, "enc", "gzip")
 		addLogNote(r, "from", "cache")
 		addLogNote(r, "tier", "1/1440")
+		setLogRecords(r, 42)
+		w.Write([]byte("x"))
 	}))
 
-	for _, tc := range []struct {
-		header, value, want string
-	}{
-		{"Accept-Encoding", "gzip", ` 200 in=0B out=\d+B \S+ list=full enc=gzip from=cache tier=1/1440 records=\d+$`},
-		{"", "", ` 200 in=0B out=44B \S+ list=full enc=plain from=cache tier=1/1440 records=\d+$`},
-		{"If-None-Match", p.etag, ` 304 in=0B out=0B \S+ list=not-modified from=cache tier=1/1440 records=0$`},
-	} {
-		out.Reset()
-		req := httptest.NewRequest("GET", "/api/v1/ips", nil)
-		if tc.header != "" {
-			req.Header.Set(tc.header, tc.value)
-		}
-		h.ServeHTTP(httptest.NewRecorder(), req)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/v1/ips", nil))
 
-		line := strings.TrimSpace(out.String())
-		if !regexp.MustCompile(tc.want).MatchString(line) {
-			t.Errorf("log %q does not match %q", line, tc.want)
-		}
+	line := strings.TrimSpace(out.String())
+	want := ` 200 in=0B out=1B \S+ list=full enc=gzip from=cache tier=1/1440 records=42$`
+	if !regexp.MustCompile(want).MatchString(line) {
+		t.Errorf("log %q does not match %q", line, want)
 	}
+}
 
-	// Requests without notes keep the plain format.
-	out.Reset()
-	logRequests(http.NotFoundHandler()).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
+func TestLogNotesNoDuplicateRecords(t *testing.T) {
+	// String() must not append the records note twice when it is called again.
+	notes := &logNotes{parts: []string{"list=full"}, records: 5, recordsSet: true}
+	first := notes.String()
+	second := notes.String()
+	if first != second {
+		t.Errorf("String() is not stable: %q vs %q", first, second)
+	}
+	if n := strings.Count(second, "records="); n != 1 {
+		t.Errorf("records= appears %d times: %q", n, second)
+	}
+}
+
+func TestLogRequestsWithoutNotes(t *testing.T) {
+	var out bytes.Buffer
+	log.SetOutput(&out)
+	defer log.SetOutput(io.Discard)
+
+	LogRequests(http.NotFoundHandler()).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 	if line := strings.TrimSpace(out.String()); !regexp.MustCompile(` 404 in=0B out=19B \S+$`).MatchString(line) {
 		t.Errorf("log without notes: %q", line)
 	}

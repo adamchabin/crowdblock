@@ -17,7 +17,7 @@ Or from the sources (`go run`):
 ```sh
 docker compose up -d postgres redis
 ./scripts/update_geoip.sh     # optional: country database (DB-IP Lite)
-./run.sh                      # go run . with development data (seed.sql)
+./run.sh                      # go run ./cmd/server with development data (seed.sql)
 ```
 
 ## Docker
@@ -107,7 +107,7 @@ current list's ETag (send it next time). `count` and `set_hash` (first 16 hex
 digits of the SHA-256 of the sorted addresses, each followed by `\n`) describe
 the whole current set: a client that ends up with a different set must fetch
 the full list. Clients tell a delta (`{`) from a full list (`[`) by the first
-character. Details: `delta.go`. The request log shows `list=full`,
+character. Details: `internal/list/delta.go`. The request log shows `list=full`,
 `list=diff` or `list=not-modified`. With several server instances only one
 generates per round (lock `ips:lock`). Until the first round, or without
 Redis, the list is computed from PostgreSQL.

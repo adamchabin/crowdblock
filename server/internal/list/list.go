@@ -1,4 +1,6 @@
-package main
+// Package list handles the precomputed IP blocklist: generation, caching in
+// Redis, and delta sync for GET /api/v1/ips.
+package list
 
 import (
 	"bytes"
@@ -11,7 +13,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+	"sync/atomic"
 	"time"
+
+	"server/internal/db"
+	"server/internal/logging"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -31,10 +38,33 @@ import (
 const (
 	defaultListRefresh = time.Minute
 	listLockKey        = "ips:lock"
+	listVersionKey     = "ips:version"
+	listHistory        = 60 // generations kept for deltas (1 h at LIST_REFRESH=1m)
+	maxDeltaFraction   = 2  // a delta larger than count/2 is sent as the full list
 )
 
-func listKey(minReporters, minutes int, kind string) string {
-	return fmt.Sprintf("ips:%d:%d:%s", minReporters, minutes, kind)
+// The list is served for fixed thresholds only, so that the server can
+// precompute and cache every combination (5 × 4 lists).
+var (
+	// AllowedMinReporters are the accepted min_reporters values.
+	AllowedMinReporters = []int{1, 5, 10, 20, 50}
+	// AllowedMinutes are the accepted minutes values.
+	AllowedMinutes = []int{60, 360, 1440, 10080} // 1 h, 6 h, 24 h, 7 days
+)
+
+// Counters of the served lists (for the statistics endpoint).
+var (
+	ListFull        atomic.Int64
+	ListNotModified atomic.Int64
+	ListDelta       atomic.Int64
+	ListMiss        atomic.Int64
+)
+
+// Meta describes what was served, for the request log.
+type Meta struct {
+	Kind     string // "full", "diff" or "not-modified"
+	Encoding string // "gzip" or "plain"
+	Records  int    // number of IP records sent
 }
 
 // listPayload is one precomputed list.
@@ -43,6 +73,25 @@ type listPayload struct {
 	gz    []byte
 	etag  string
 }
+
+// listKey returns the Redis key of one list version/kind.
+func listKey(minReporters, minutes int, kind string) string {
+	return fmt.Sprintf("ips:%d:%d:%s", minReporters, minutes, kind)
+}
+
+// listRefreshInterval returns the interval between list generations.
+func listRefreshInterval() time.Duration {
+	if v := os.Getenv("LIST_REFRESH"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= time.Second {
+			return d
+		}
+		slog.Warn("invalid LIST_REFRESH, using default", "value", v, "default", defaultListRefresh)
+	}
+	return defaultListRefresh
+}
+
+// RefreshInterval returns the interval between list generations.
+func RefreshInterval() time.Duration { return listRefreshInterval() }
 
 // encodeList writes the list as a JSON array with one entry per line:
 //
@@ -53,7 +102,7 @@ type listPayload struct {
 //
 // Plain JSON for any client, and the OpenWrt client can parse it line by
 // line while unpacking, without holding the whole list in memory.
-func encodeList(entries []ipListEntry) ([]byte, error) {
+func encodeList(entries []db.IPListEntry) ([]byte, error) {
 	if len(entries) == 0 {
 		return []byte("[]\n"), nil // not "null": clients expect an array
 	}
@@ -75,7 +124,8 @@ func encodeList(entries []ipListEntry) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func newListPayload(entries []ipListEntry) (listPayload, error) {
+// NewListPayload builds one list version (plain, gzip, ETag).
+func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 	encoded, err := encodeList(entries)
 	if err != nil {
 		return listPayload{}, err
@@ -102,8 +152,8 @@ func newListPayload(entries []ipListEntry) (listPayload, error) {
 }
 
 // atLeast returns the leading entries with at least min reporters. `entries`
-// must be sorted by DistinctReporters, descending (as queryIPList returns).
-func atLeast(entries []ipListEntry, min int) []ipListEntry {
+// must be sorted by DistinctReporters, descending (as db.QueryIPList returns).
+func atLeast(entries []db.IPListEntry, min int) []db.IPListEntry {
 	n := 0
 	for n < len(entries) && entries[n].DistinctReporters >= min {
 		n++
@@ -114,10 +164,10 @@ func atLeast(entries []ipListEntry, min int) []ipListEntry {
 // buildLists computes the lists of every allowed min_reporters for one
 // window from the entries with min_reporters 1 – one database query per
 // window instead of five. Keyed by min_reporters.
-func buildLists(all []ipListEntry) (map[int]listPayload, error) {
+func buildLists(all []db.IPListEntry) (map[int]listPayload, error) {
 	lists := map[int]listPayload{}
-	for _, min := range allowedMinReporters {
-		p, err := newListPayload(atLeast(all, min))
+	for _, min := range AllowedMinReporters {
+		p, err := NewListPayload(atLeast(all, min))
 		if err != nil {
 			return nil, err
 		}
@@ -126,18 +176,8 @@ func buildLists(all []ipListEntry) (map[int]listPayload, error) {
 	return lists, nil
 }
 
-func listRefreshInterval() time.Duration {
-	if v := os.Getenv("LIST_REFRESH"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d >= time.Second {
-			return d
-		}
-		slog.Warn("invalid LIST_REFRESH, using default", "value", v, "default", defaultListRefresh)
-	}
-	return defaultListRefresh
-}
-
-// runListGenerator regenerates all lists every interval until ctx is done.
-func runListGenerator(ctx context.Context, interval time.Duration) error {
+// RunListGenerator regenerates all lists every interval until ctx is done.
+func RunListGenerator(ctx context.Context, interval time.Duration) error {
 	instance := fmt.Sprintf("%s:%d", hostname(), os.Getpid())
 	failing := false
 
@@ -146,7 +186,7 @@ func runListGenerator(ctx context.Context, interval time.Duration) error {
 
 	for {
 		start := time.Now()
-		n, err := generateLists(ctx, instance, interval)
+		n, err := GenerateLists(ctx, instance, interval)
 		switch {
 		case err != nil && !failing:
 			// Logged once until it works again (Redis down = every round).
@@ -166,20 +206,17 @@ func runListGenerator(ctx context.Context, interval time.Duration) error {
 	}
 }
 
-// generateLists returns the number of lists stored; 0 when another instance
+// GenerateLists returns the number of lists stored; 0 when another instance
 // holds the lock for this round.
-func generateLists(ctx context.Context, instance string, interval time.Duration) (int, error) {
+func GenerateLists(ctx context.Context, instance string, interval time.Duration) (int, error) {
 	// Held for a bit less than a round, so that the next round can take it.
 	start := time.Now()
-	ok, err := rdb.SetNX(ctx, listLockKey, instance, interval-interval/10).Result()
+	ok, err := db.RDB.SetNX(ctx, listLockKey, instance, interval-interval/10).Result()
 	if err != nil {
 		return 0, fmt.Errorf("redis lock: %w", err)
 	}
 	if !ok {
-		if debug {
-			holder, _ := rdb.Get(ctx, listLockKey).Result()
-			debugf("lists: round skipped, lock held by %s", holder)
-		}
+		logging.Debugf("lists: round skipped, lock held by %s", instance)
 		return 0, nil
 	}
 
@@ -188,27 +225,27 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 	if err != nil {
 		return 0, err
 	}
-	version, err := rdb.Incr(ctx, listVersionKey).Result()
+	version, err := db.RDB.Incr(ctx, listVersionKey).Result()
 	if err != nil {
 		return 0, fmt.Errorf("redis version: %w", err)
 	}
-	debugf("lists: round %d started (lock taken by %s, %d previous lists in Redis)", version, instance, len(prev))
+	logging.Debugf("lists: round %d started (lock taken by %s, %d previous lists in Redis)", version, instance, len(prev))
 
-	lists := map[int]map[int]listPayload{}     // minutes -> min_reporters -> list
-	entries := map[int]map[int][]ipListEntry{} // the same, decoded
+	lists := map[int]map[int]listPayload{}        // minutes -> min_reporters -> list
+	entries := map[int]map[int][]db.IPListEntry{} // the same, decoded
 	n := 0
-	for _, minutes := range allowedMinutes {
+	for _, minutes := range AllowedMinutes {
 		queryStart := time.Now()
-		all, err := queryIPList(ctx, minutes, 1)
+		all, err := db.QueryIPList(ctx, minutes, 1)
 		if err != nil {
 			return 0, fmt.Errorf("query (minutes=%d): %w", minutes, err)
 		}
-		debugf("lists: round %d window %dm: %d addresses, query %s", version, minutes, len(all), time.Since(queryStart).Round(time.Microsecond))
+		logging.Debugf("lists: round %d window %dm: %d addresses, query %s", version, minutes, len(all), time.Since(queryStart).Round(time.Microsecond))
 		if lists[minutes], err = buildLists(all); err != nil {
 			return 0, err
 		}
-		entries[minutes] = map[int][]ipListEntry{}
-		for _, min := range allowedMinReporters {
+		entries[minutes] = map[int][]db.IPListEntry{}
+		for _, min := range AllowedMinReporters {
 			entries[minutes][min] = atLeast(all, min)
 		}
 		n += len(lists[minutes])
@@ -218,7 +255,7 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 	// the ETag, or a diff) of different generations. Expire if the generator
 	// stops.
 	ttl := 5 * interval
-	_, err = rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+	_, err = db.RDB.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		for minutes, window := range lists {
 			for min, p := range window {
 				pipe.Set(ctx, listKey(min, minutes, "json"), p.plain, ttl)
@@ -231,15 +268,8 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 					return err
 				}
 
-				if debug {
-					diff := "no previous list, no diff"
-					if known {
-						d := computeDiff(old, entries[minutes][min])
-						diff = fmt.Sprintf("diff +%d/-%d", len(d.Upsert), len(d.Remove))
-					}
-					debugf("lists: round %d list %d/%d: %d addresses, etag %s, %dB plain / %dB gzip, %s",
-						version, min, minutes, len(entries[minutes][min]), p.etag, len(p.plain), len(p.gz), diff)
-				}
+				logging.Debugf("lists: round %d list %d/%d: %d addresses, etag %s, %dB plain / %dB gzip",
+					version, min, minutes, len(entries[minutes][min]), p.etag, len(p.plain), len(p.gz))
 			}
 		}
 		return nil
@@ -247,28 +277,28 @@ func generateLists(ctx context.Context, instance string, interval time.Duration)
 	if err != nil {
 		return 0, fmt.Errorf("redis write: %w", err)
 	}
-	debugf("lists: round %d done, %d lists in %s", version, n, time.Since(start).Round(time.Millisecond))
+	logging.Debugf("lists: round %d done, %d lists in %s", version, n, time.Since(start).Round(time.Millisecond))
 	return n, nil
 }
 
 // previousLists returns the lists of the previous generation still in Redis,
 // decoded, keyed by their json key.
-func previousLists(ctx context.Context) (map[string][]ipListEntry, error) {
+func previousLists(ctx context.Context) (map[string][]db.IPListEntry, error) {
 	var keys []string
-	for _, minutes := range allowedMinutes {
-		for _, min := range allowedMinReporters {
+	for _, minutes := range AllowedMinutes {
+		for _, min := range AllowedMinReporters {
 			keys = append(keys, listKey(min, minutes, "json"))
 		}
 	}
 
-	vals, err := rdb.MGet(ctx, keys...).Result()
+	vals, err := db.RDB.MGet(ctx, keys...).Result()
 	if err != nil {
 		return nil, fmt.Errorf("redis read: %w", err)
 	}
 
-	prev := map[string][]ipListEntry{}
+	prev := map[string][]db.IPListEntry{}
 	for i, v := range vals {
-		var list []ipListEntry
+		var list []db.IPListEntry
 		if s, ok := v.(string); ok && json.Unmarshal([]byte(s), &list) == nil {
 			prev[keys[i]] = list
 		}
@@ -276,30 +306,31 @@ func previousLists(ctx context.Context) (map[string][]ipListEntry, error) {
 	return prev, nil
 }
 
-// serveCachedList writes the precomputed list and returns true, or returns
-// false (nothing written) when it is not in Redis.
-func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minutes int) bool {
+// ServeCachedList writes the precomputed list and returns what it served, or
+// returns ok=false (nothing written) when the list is not in Redis.
+func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minutes int) (Meta, bool) {
 	ctx := r.Context()
 
 	// On a Redis error just fall back: the generator already logs it, once.
-	etag, err := rdb.Get(ctx, listKey(minReporters, minutes, "etag")).Result()
+	etag, err := db.RDB.Get(ctx, listKey(minReporters, minutes, "etag")).Result()
 	if err != nil {
-		debugf("list %d/%d: no etag in Redis (%v)", minReporters, minutes, err)
-		listMiss.Add(1)
-		return false
+		logging.Debugf("list %d/%d: no etag in Redis (%v)", minReporters, minutes, err)
+		ListMiss.Add(1)
+		return Meta{}, false
 	}
 
 	have := r.Header.Get("If-None-Match")
 	if have == etag {
-		listNotModified.Add(1)
-		writeList(w, r, etag, nil, false) // 304
-		return true
+		ListNotModified.Add(1)
+		return writeList(w, r, etag, nil, false), true
 	}
 
 	// Delta sync only for clients asking for it: others couldn't parse it.
-	if have != "" && r.URL.Query().Get("delta") == "1" && serveDelta(w, r, minReporters, minutes, have, etag) {
-		listDelta.Add(1)
-		return true
+	if have != "" && r.URL.Query().Get("delta") == "1" {
+		if meta, ok := serveDelta(w, r, minReporters, minutes, have, etag); ok {
+			ListDelta.Add(1)
+			return meta, true
+		}
 	}
 
 	gzipped := acceptsGzip(r)
@@ -307,28 +338,26 @@ func serveCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 	if gzipped {
 		kind = "gz"
 	}
-	body, err := rdb.Get(ctx, listKey(minReporters, minutes, kind)).Bytes()
+	body, err := db.RDB.Get(ctx, listKey(minReporters, minutes, kind)).Bytes()
 	if err != nil {
-		listMiss.Add(1)
-		return false
+		ListMiss.Add(1)
+		return Meta{}, false
 	}
 
-	listFull.Add(1)
-	writeList(w, r, etag, body, gzipped)
-	return true
+	ListFull.Add(1)
+	return writeList(w, r, etag, body, gzipped), true
 }
 
-// writeListPayload sends a list computed for this request (no cache).
-func writeListPayload(w http.ResponseWriter, r *http.Request, p listPayload) {
+// WriteListPayload sends a list computed for this request (no cache).
+func WriteListPayload(w http.ResponseWriter, r *http.Request, p listPayload) Meta {
 	if acceptsGzip(r) {
-		writeList(w, r, p.etag, p.gz, true)
-	} else {
-		writeList(w, r, p.etag, p.plain, false)
+		return writeList(w, r, p.etag, p.gz, true)
 	}
+	return writeList(w, r, p.etag, p.plain, false)
 }
 
 // writeList sends one version of a list, or 304 if the client has it.
-func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte, gzipped bool) {
+func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte, gzipped bool) Meta {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Add("Vary", "Accept-Encoding")
@@ -336,31 +365,44 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 	// Clients may keep the list but must ask whether it changed.
 	h.Set("Cache-Control", "no-cache")
 
-	// Shown in the request log: full list, or the client's copy is current.
-	// ("diff" will come with delta sync.)
-	if r.Header.Get("If-None-Match") == etag {
-		addLogNote(r, "list", "not-modified")
-		setLogRecords(r, 0)
-		w.WriteHeader(http.StatusNotModified)
-		return
+	meta := Meta{Kind: "full", Encoding: "plain"}
+	if gzipped {
+		meta.Encoding = "gzip"
 	}
 
-	addLogNote(r, "list", "full")
-	setLogRecords(r, bytes.Count(body, []byte("\"ip\":")))
+	// The client's copy is current: 304 and no body at all.
+	if r.Header.Get("If-None-Match") == etag {
+		meta.Kind = "not-modified"
+		meta.Records = 0
+		w.WriteHeader(http.StatusNotModified)
+		return meta
+	}
+
+	meta.Records = bytes.Count(body, []byte(`"ip":`))
 	if gzipped {
-		addLogNote(r, "enc", "gzip")
 		h.Set("Content-Encoding", "gzip")
-	} else {
-		addLogNote(r, "enc", "plain")
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+	return meta
 }
 
+// hostname returns the OS hostname.
 func hostname() string {
 	h, err := os.Hostname()
 	if err != nil {
 		return "unknown"
 	}
 	return h
+}
+
+// acceptsGzip: "Accept-Encoding: gzip" or "gzip, deflate, br" (q=0 disables).
+func acceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		name, params, _ := strings.Cut(strings.TrimSpace(part), ";")
+		if strings.EqualFold(strings.TrimSpace(name), "gzip") {
+			return strings.ReplaceAll(strings.TrimSpace(params), " ", "") != "q=0"
+		}
+	}
+	return false
 }

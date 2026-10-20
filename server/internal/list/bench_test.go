@@ -1,22 +1,23 @@
-package main
+package list
 
 import (
 	"net/netip"
-	"net/url"
 	"testing"
+
+	"server/internal/db"
 )
 
 // Bench fixtures mirror what production actually feeds these functions:
-// ipListEntry entries coming out of queryIPList (reporters desc, ip asc) and
-// the GeoIP DB-IP file. Keeping sizes close to real lists (thousands) matters
-// because the hot path is encodeList → newListPayload called for every
+// db.IPListEntry entries coming out of db.QueryIPList (reporters desc, ip asc)
+// and the GeoIP DB-IP file. Keeping sizes close to real lists (thousands)
+// matters because the hot path is encodeList → NewListPayload called for every
 // (min_reporters, minutes) cell of the 5×4 grid per generation.
 
-func benchEntries(n int) []ipListEntry {
-	entries := make([]ipListEntry, n)
+func benchEntries(n int) []db.IPListEntry {
+	entries := make([]db.IPListEntry, n)
 	for i := range n {
 		// Reporters descending so atLeast (leading slice) is exercised like prod.
-		entries[i] = ipListEntry{
+		entries[i] = db.IPListEntry{
 			IP:                "203.0.113." + itoa(i%254+1),
 			DistinctReporters: n - i,
 			Country:           "CN",
@@ -60,14 +61,14 @@ func BenchmarkNewListPayload(b *testing.B) {
 		b.Run("entries="+itoa(n), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				_, _ = newListPayload(entries)
+				_, _ = NewListPayload(entries)
 			}
 		})
 	}
 }
 
 // buildLists exercises all five min_reporters thresholds per window, the full
-// per-window work path. Size matches queryIPList(max window) output.
+// per-window work path. Size matches db.QueryIPList(max window) output.
 func BenchmarkBuildLists(b *testing.B) {
 	entries := benchEntries(5000)
 	b.ReportAllocs()
@@ -76,27 +77,19 @@ func BenchmarkBuildLists(b *testing.B) {
 	}
 }
 
-// countryOf against the real DB-IP Lite file: lookup cost with/without name.
-func BenchmarkCountryOf(b *testing.B) {
-	db, err := openGeoIPForBench("geoip/dbip-country-lite.mmdb")
-	if err != nil {
-		b.Fatal(err)
-	}
-	r := &RealGeoDBReader{db: db}
-	addr := netip.MustParseAddr("8.8.8.8")
-
+// atLeast is on the hot path of every generation.
+func BenchmarkAtLeast(b *testing.B) {
+	entries := benchEntries(5000)
 	b.ReportAllocs()
-	b.ResetTimer()
 	for b.Loop() {
-		_, _ = countryOf(addr, r)
+		_ = atLeast(entries, 5)
 	}
 }
 
-// parseListParams validates the query string of GET /api/v1/ips on every
-// cached or DB-backed request.
-func BenchmarkParseListParams(b *testing.B) {
-	q := url.Values{"min_reporters": []string{"10"}, "minutes": []string{"1440"}}
+// The address of a router is parsed and canonicalized on every report.
+func BenchmarkNetipParse(b *testing.B) {
+	b.ReportAllocs()
 	for b.Loop() {
-		_, _, _ = parseListParams(q)
+		_, _ = netip.ParseAddr("203.0.113.42")
 	}
 }

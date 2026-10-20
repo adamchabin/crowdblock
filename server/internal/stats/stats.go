@@ -1,25 +1,22 @@
-package main
+// Package stats provides the public statistics endpoint of the server.
+package stats
 
 import (
 	"context"
-	_ "embed"
+	"encoding/json"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"server/internal/db"
+	"server/internal/list"
 )
 
-//go:embed ui.html
-var uiHTML []byte
-
-//go:embed world.json
-var worldJSON []byte
-
 // Aggregates only: no addresses and no user data, so the endpoint is public.
-type statsResponse struct {
+type response struct {
 	GeneratedAt    time.Time      `json:"generated_at"`
 	Users          int            `json:"users"`
 	ActiveKeys     int            `json:"active_keys"`
@@ -33,16 +30,11 @@ type statsResponse struct {
 	Cache          cacheStats     `json:"cache"`
 }
 
-// Cache counters live in this process (atomics, no cost on the hot path)
-// and restart from zero with it.
+// cacheStats holds the counters of the API key cache and the list cache.
+// They live in this process (atomics, no cost on the hot path) and restart
+// from zero with it.
 // shortcut: per instance, not summed over several instances; move to Redis
 // INCRs if that is ever needed.
-var (
-	cacheStart                                     = time.Now()
-	keyHits, keyMisses                             atomic.Int64 // API key auth: Redis / postgres
-	listFull, listNotModified, listDelta, listMiss atomic.Int64 // GET /ips: answered from Redis (3 ways) / computed from postgres
-)
-
 type cacheStats struct {
 	Since  time.Time `json:"since"`
 	APIKey struct {
@@ -65,37 +57,6 @@ type redisStats struct {
 	KeyspaceMisses int64 `json:"keyspace_misses"`
 }
 
-func computeCacheStats(ctx context.Context) cacheStats {
-	var c cacheStats
-	c.Since = cacheStart.UTC()
-	c.APIKey.Hits, c.APIKey.Misses = keyHits.Load(), keyMisses.Load()
-	c.Lists.Full, c.Lists.NotModified, c.Lists.Delta, c.Lists.Misses =
-		listFull.Load(), listNotModified.Load(), listDelta.Load(), listMiss.Load()
-
-	keys, err := rdb.DBSize(ctx).Result()
-	info, err2 := rdb.Info(ctx, "memory", "stats").Result()
-	if err == nil && err2 == nil {
-		r := &redisStats{Keys: keys}
-		for _, line := range strings.Split(info, "\n") {
-			k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
-			n, _ := strconv.ParseInt(v, 10, 64)
-			if !ok {
-				continue
-			}
-			switch k {
-			case "used_memory":
-				r.UsedMemory = n
-			case "keyspace_hits":
-				r.KeyspaceHits = n
-			case "keyspace_misses":
-				r.KeyspaceMisses = n
-			}
-		}
-		c.Redis = r
-	}
-	return c
-}
-
 type countryCount struct {
 	Country     string `json:"country"`
 	CountryName string `json:"country_name,omitempty"`
@@ -105,14 +66,15 @@ type countryCount struct {
 const statsTTL = time.Minute
 
 var (
+	cacheStart  = time.Now()
 	statsMu     sync.Mutex
-	statsCache  *statsResponse
+	statsCache  *response
 	statsExpiry time.Time
 )
 
-// cachedStats recomputes at most once per statsTTL; the lock also stops
+// CachedStats recomputes at most once per statsTTL; the lock also stops
 // concurrent requests from running the queries in parallel.
-func cachedStats(ctx context.Context) (*statsResponse, error) {
+func CachedStats(ctx context.Context) (*response, error) {
 	statsMu.Lock()
 	defer statsMu.Unlock()
 	if statsCache != nil && time.Now().Before(statsExpiry) {
@@ -126,10 +88,16 @@ func cachedStats(ctx context.Context) (*statsResponse, error) {
 	return s, nil
 }
 
-func computeStats(ctx context.Context) (*statsResponse, error) {
-	s := &statsResponse{Cache: computeCacheStats(ctx), GeneratedAt: time.Now().UTC(), Hourly: make([]int, 24), Sources: map[string]int{}, Countries: []countryCount{}}
+func computeStats(ctx context.Context) (*response, error) {
+	s := &response{
+		Cache:       computeCacheStats(ctx),
+		GeneratedAt: time.Now().UTC(),
+		Hourly:      make([]int, 24),
+		Sources:     map[string]int{},
+		Countries:   []countryCount{},
+	}
 
-	if err := db.QueryRow(ctx, `
+	if err := db.DB.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM users),
 		       (SELECT count(*) FROM api_keys WHERE revoked_at IS NULL),
 		       count(*) FILTER (WHERE reported_at > now() - interval '24 hours'),
@@ -142,7 +110,7 @@ func computeStats(ctx context.Context) (*statsResponse, error) {
 	}
 
 	// hours ago (0 = the current hour) -> count
-	rows, err := db.Query(ctx, `
+	rows, err := db.DB.Query(ctx, `
 		SELECT 23 - floor(extract(epoch FROM date_trunc('hour', now()) - date_trunc('hour', reported_at)) / 3600)::int, count(*)
 		FROM ip_reports WHERE reported_at > date_trunc('hour', now()) - interval '23 hours'
 		GROUP BY 1`)
@@ -164,7 +132,7 @@ func computeStats(ctx context.Context) (*statsResponse, error) {
 		return nil, rows.Err()
 	}
 
-	rows, err = db.Query(ctx, `
+	rows, err = db.DB.Query(ctx, `
 		SELECT COALESCE(source, 'unknown'), count(*) FROM ip_reports
 		WHERE reported_at > now() - interval '24 hours' GROUP BY 1`)
 	if err != nil {
@@ -184,7 +152,7 @@ func computeStats(ctx context.Context) (*statsResponse, error) {
 		return nil, rows.Err()
 	}
 
-	ips, err := queryIPList(ctx, 1440, 1)
+	ips, err := db.QueryIPList(ctx, 1440, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -213,8 +181,43 @@ func computeStats(ctx context.Context) (*statsResponse, error) {
 	return s, nil
 }
 
-func handleStats(w http.ResponseWriter, r *http.Request) {
-	s, err := cachedStats(r.Context())
+func computeCacheStats(ctx context.Context) cacheStats {
+	var c cacheStats
+	c.Since = cacheStart.UTC()
+	c.APIKey.Hits = db.KeyHits.Load()
+	c.APIKey.Misses = db.KeyMisses.Load()
+	c.Lists.Full = list.ListFull.Load()
+	c.Lists.NotModified = list.ListNotModified.Load()
+	c.Lists.Delta = list.ListDelta.Load()
+	c.Lists.Misses = list.ListMiss.Load()
+
+	keys, err := db.RDB.DBSize(ctx).Result()
+	info, err2 := db.RDB.Info(ctx, "memory", "stats").Result()
+	if err == nil && err2 == nil {
+		r := &redisStats{Keys: keys}
+		for _, line := range strings.Split(info, "\n") {
+			k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+			n, _ := strconv.ParseInt(v, 10, 64)
+			if !ok {
+				continue
+			}
+			switch k {
+			case "used_memory":
+				r.UsedMemory = n
+			case "keyspace_hits":
+				r.KeyspaceHits = n
+			case "keyspace_misses":
+				r.KeyspaceMisses = n
+			}
+		}
+		c.Redis = r
+	}
+	return c
+}
+
+// HandleStats handles GET /api/v1/stats.
+func HandleStats(w http.ResponseWriter, r *http.Request) {
+	s, err := CachedStats(r.Context())
 	if err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
@@ -223,18 +226,8 @@ func handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s)
 }
 
-func handleUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_, _ = w.Write(uiHTML)
-}
-
-// worldJSON holds simplified country shapes with ISO 3166-1 alpha-2 codes
-// (generated once into world.json), matched client-side against stats.
-func handleWorld(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/geo+json")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_, _ = w.Write(worldJSON)
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }

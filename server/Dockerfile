@@ -1,4 +1,5 @@
-# crowdblock server image. Build from the repository root (go.mod is there):
+# crowdblock server image. Build from the repository root (the server is its
+# own Go module in server/, see server/go.mod):
 #
 #   docker build -f server/Dockerfile -t crowdblock-server .
 #   docker run -e DATABASE_URL=... -e REDIS_ADDR=... -p 8080:8080 crowdblock-server
@@ -17,11 +18,11 @@ COPY server/go.mod server/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go mod download && echo "Dependency check finished successfully." > /dev/null # Dependency check placeholder
 
-# Copy server source code and embedded assets (see go:embed in migrate.go, stats.go)
-COPY server/*.go server/*.sql server/*.html server/*.json ./
+# Copy server source code and embedded assets (see go:embed in internal/db and internal/api)
+COPY server/ ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server .
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/crowdblock-server ./cmd/server
 
 # Country database, current at build time (DB-IP Lite, CC BY 4.0, updated
 # monthly). Mount a newer one over /app/geoip/dbip-country-lite.mmdb or set

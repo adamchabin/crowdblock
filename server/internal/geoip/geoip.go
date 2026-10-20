@@ -1,4 +1,5 @@
-package main
+// Package geoip provides IP-to-country lookup using the MaxMind DB-IP database.
+package geoip
 
 import (
 	"log/slog"
@@ -15,8 +16,8 @@ type GeoDBReader interface {
 	Lookup(addr netip.Addr) (isoCode, name string, err error)
 }
 
-// Global reader, set after initialization completes.
-var geoDB GeoDBReader
+// GeoDB is the global reader, set after initialization completes.
+var GeoDB GeoDBReader
 
 // RealGeoDBReader wraps maxminddb.Reader.
 type RealGeoDBReader struct {
@@ -36,23 +37,25 @@ func (r *RealGeoDBReader) Lookup(addr netip.Addr) (isoCode, name string, err err
 	return result.Country.ISOCode, result.Country.Names["en"], nil
 }
 
-// openGeoIP initializes the global database reader using the given file.
-func openGeoIP(dbPath string) error {
+// OpenGeoIP initializes the global database reader using the given file.
+func OpenGeoIP(dbPath string) error {
 	db, err := maxminddb.Open(dbPath)
 	if err != nil {
 		return err
 	}
-	geoDB = &RealGeoDBReader{db: db}
+	GeoDB = &RealGeoDBReader{db: db}
 	slog.Info("GeoIP DB loaded", "path", dbPath)
 	return nil
 }
 
-// countryOf returns the ISO 3166-1 alpha-2 code and the English country name
+// CountryOf returns the ISO 3166-1 alpha-2 code and the English country name
 // for the address, or ("Unknown", "Unknown") when the lookup fails.
-func countryOf(addr netip.Addr, reader GeoDBReader) (code, name string) {
-	// 1. Lookup database using the provided reader
-	isoCode, name, err := reader.Lookup(addr)
+func CountryOf(addr netip.Addr, reader GeoDBReader) (code, name string) {
+	if reader == nil {
+		return "Unknown", "Unknown"
+	}
 
+	isoCode, name, err := reader.Lookup(addr)
 	if err != nil || isoCode == "" {
 		return "Unknown", "Unknown"
 	}

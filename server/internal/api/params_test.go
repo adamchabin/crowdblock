@@ -1,10 +1,13 @@
-package main
+package api
 
 import (
 	"fmt"
 	"net/netip"
 	"net/url"
 	"testing"
+
+	"server/internal/db"
+	"server/internal/list"
 )
 
 func TestParseListParams(t *testing.T) {
@@ -37,8 +40,8 @@ func TestIsPublicIP(t *testing.T) {
 		"10.0.0.1": false, "192.168.1.1": false, "127.0.0.1": false, "0.0.0.0": false,
 		"169.254.1.1": false, "224.0.0.1": false, "::1": false, "fe80::1": false, "fd00::1": false,
 	} {
-		if got := isPublicIP(netip.MustParseAddr(ip)); got != want {
-			t.Errorf("isPublicIP(%s) = %v, want %v", ip, got, want)
+		if got := db.IsPublicIP(netip.MustParseAddr(ip)); got != want {
+			t.Errorf("IsPublicIP(%s) = %v, want %v", ip, got, want)
 		}
 	}
 }
@@ -60,5 +63,12 @@ func TestGeneratePassword(t *testing.T) {
 	b, _ := generatePassword()
 	if len(a) != 20 || a == b {
 		t.Errorf("bad passwords %q %q", a, b)
+	}
+}
+
+func TestAllowedTiers(t *testing.T) {
+	// The server precomputes exactly these combinations.
+	if len(list.AllowedMinReporters) != 5 || len(list.AllowedMinutes) != 4 {
+		t.Errorf("tiers = %d×%d, want 5×4", len(list.AllowedMinReporters), len(list.AllowedMinutes))
 	}
 }

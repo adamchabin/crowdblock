@@ -1,4 +1,5 @@
-package main
+// Package db provides PostgreSQL and Redis access for the crowdblock server.
+package db
 
 import (
 	"context"
@@ -7,10 +8,18 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
+
+// DB is the global PostgreSQL connection pool.
+var DB *pgxpool.Pool
+
+// RDB is the global Redis client.
+var RDB *redis.Client
 
 //go:embed schema.sql
 var schemaSQL string
@@ -77,4 +86,44 @@ func EnsureSeed(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	slog.Info("development seed data loaded")
 	return nil
+}
+
+// Connect opens a PostgreSQL connection pool and a Redis client.
+func Connect(ctx context.Context, dsn, redisAddr string) error {
+	var err error
+	DB, err = pgxpool.New(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("cannot connect to database: %w", err)
+	}
+
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	RDB = redis.NewClient(&redis.Options{Addr: redisAddr})
+	if err := RDB.Ping(ctx).Err(); err != nil {
+		slog.Warn("redis unavailable, API key auth will hit postgres", "addr", redisAddr, "err", err)
+	}
+	return nil
+}
+
+// Close closes the database pool and the Redis client.
+func Close() {
+	if DB != nil {
+		DB.Close()
+	}
+	if RDB != nil {
+		RDB.Close()
+	}
+}
+
+// PingRedis pings Redis, used at startup to check the cache.
+func PingRedis(ctx context.Context) error {
+	return RDB.Ping(ctx).Err()
+}
+
+// PingTimeout pings Redis with a timeout, used at startup.
+func PingTimeout(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return RDB.Ping(ctx).Err()
 }
