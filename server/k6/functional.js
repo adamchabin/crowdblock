@@ -21,7 +21,6 @@ export const options = {
       executor: 'per-vu-iterations',
       vus: 1,
       iterations: 1,
-      maxVUs: 1,
     },
   },
   thresholds: { checks: ['rate==1.00'] },
