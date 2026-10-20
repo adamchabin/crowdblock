@@ -7,6 +7,7 @@
 #   ./run-tests.sh --load             # Load test (5min mixed)
 #   ./run-tests.sh --read             # Read-only test (1min lists)
 #   ./run-tests.sh --write            # Write-only test (1min reports)
+#   ./run-tests.sh --functional       # Functional tests (verify response bodies)
 #   ./run-tests.sh --cleanup          # Stop and remove containers
 #
 # Requires: docker, docker compose, k6 (or runs k6 via docker)
@@ -59,6 +60,11 @@ while [[ $# -gt 0 ]]; do
             DURATION="1m"
             WRITE_RATE="50"
             USERS="20"
+            ;;
+        --functional)
+            MODE="functional"
+            DURATION="1m"
+            USERS="1"
             ;;
         --cleanup)
             CLEANUP_ONLY=true
@@ -171,6 +177,10 @@ run_tests() {
         write)
             echo "=== Running Write-Only Test ==="
             run_k6 "reports.js"
+            ;;
+        functional)
+            echo "=== Running Functional Tests ==="
+            run_k6 "functional.js"
             ;;
         *)
             echo "Unknown mode: $MODE" >&2
