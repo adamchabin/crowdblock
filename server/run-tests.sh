@@ -8,6 +8,8 @@
 #   ./run-tests.sh --read             # Read-only test (1min lists)
 #   ./run-tests.sh --write            # Write-only test (1min reports)
 #   ./run-tests.sh --functional       # Functional tests (verify response bodies)
+#   ./run-tests.sh --clients          # 1000 clients reporting addresses (2min)
+#   ./run-tests.sh --readers          # 10000 clients downloading the list (1min)
 #   ./run-tests.sh --cleanup          # Stop and remove containers
 #
 # Requires: docker, docker compose, k6 (or runs k6 via docker)
@@ -25,6 +27,9 @@ READ_RATE="100"
 WRITE_RATE="50"
 ACCOUNT_RATE="1"
 USERS="100"
+RATE="100"
+VUS="50"
+MAX_VUS="200"
 CLEANUP_AFTER=true
 
 usage() {
@@ -65,6 +70,23 @@ while [[ $# -gt 0 ]]; do
             MODE="functional"
             DURATION="1m"
             USERS="1"
+            ;;
+        --clients)
+            # 1000 clients, each with its own API key, reporting addresses.
+            MODE="clients"
+            DURATION="2m"
+            USERS="1000"
+            VUS="1000"
+            MAX_VUS="1000"
+            ;;
+        --readers)
+            # 10000 clients downloading the list once a minute (~167 req/s).
+            MODE="readers"
+            DURATION="1m"
+            USERS="10000"
+            RATE="167"
+            VUS="1000"
+            MAX_VUS="10000"
             ;;
         --cleanup)
             CLEANUP_ONLY=true

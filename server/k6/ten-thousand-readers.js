@@ -1,9 +1,9 @@
-// 10 000 klientów pobierających listę IP co minutę (~167 req/s).
+// 10000 clients downloading the IP list once a minute (~167 req/s).
 //   k6 run server/k6/ten-thousand-readers.js
 //   USERS=10000 DURATION=1m k6 run server/k6/ten-thousand-readers.js
 import { setupUsers, teardownUsers, readList, num, runId } from './lib.js';
 
-const ratePerSecond = num('RATE', Math.round(10000 / 60)); // domyślnie ~10000 na minutę
+const ratePerSecond = num('RATE', Math.round(10000 / 60)); // ~10000 per minute
 
 export const options = {
   scenarios: {
@@ -13,7 +13,7 @@ export const options = {
       timeUnit: '1s',
       duration: __ENV.DURATION || '1m',
       preAllocatedVUs: num('VUS', 1000),
-      maxVUs: num('MAX_VUS', 1000),
+      maxVUs: num('MAX_VUS', 10000),
     },
   },
   setupTimeout: '15m', teardownTimeout: '5m',
@@ -24,6 +24,6 @@ export const options = {
   },
 };
 
-export const setup = () => setupUsers(num('USERS', 1000), runId(), 0);
+export const setup = () => setupUsers(num('USERS', 10000), runId(), 0);
 export default (users) => readList(users);
 export const teardown = teardownUsers;

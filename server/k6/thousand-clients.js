@@ -1,7 +1,7 @@
-// 1000 różnych klientów: każdy rejestruje konto, tworzy jeden klucz API i
-// zgłasza różne adresy IP.
+// 1000 different clients: each one reports attacking addresses with its own
+// API key (created in setup(), deleted in teardown()).
 //   k6 run server/k6/thousand-clients.js
-//   USERS=1000 DURATION=2m k6 run server/k6/thousand-clients.js
+//   USERS=1000 VUS=1000 DURATION=2m k6 run server/k6/thousand-clients.js
 import { setupUsers, teardownUsers, reportIP, num, runId } from './lib.js';
 
 export const options = {
