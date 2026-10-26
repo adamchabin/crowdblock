@@ -11,7 +11,6 @@
 
 import * as fs from 'fs';
 import * as uloop from 'uloop';
-import { connect } from 'ubus';
 import { rand, srand } from 'math';
 
 import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
@@ -123,18 +122,19 @@ function release_lock() {
 // The router's own addresses, delegated prefixes and upstream DNS servers.
 function local_addresses(cfg) {
 	let res = [];
-	let conn = connect();
-	if (!conn)
+
+	let p = fs.popen('ubus call network.interface dump 2>/dev/null', 'r');
+	if (!p)
 		return res;
 
+	let out = p.read('all');
+	p.close();
+
 	let dump;
-	try {
-		dump = conn.call('network.interface', 'dump');
-	} catch (e) {
-		warn_log('local_addresses: ubus call failed: %s', e.message);
-		conn.close();
+	try { dump = json(out); } catch (e) { }
+
+	if (type(dump) != 'object')
 		return res;
-	}
 
 	for (let iface in dump?.interface ?? []) {
 		for (let a in iface['ipv4-address'] ?? [])
@@ -172,7 +172,6 @@ function local_addresses(cfg) {
 		info(`Would resolve NTP server ${hostname} to IP for whitelisting (implementation pending)`);
 	}
 
-	conn.close();
 	return res;
 }
 
