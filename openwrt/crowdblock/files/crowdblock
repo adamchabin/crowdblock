@@ -132,6 +132,7 @@ function local_addresses(cfg) {
 		dump = conn.call('network.interface', 'dump');
 	} catch (e) {
 		warn_log('local_addresses: ubus call failed: %s', e.message);
+		conn.close();
 		return res;
 	}
 
@@ -171,6 +172,7 @@ function local_addresses(cfg) {
 		info(`Would resolve NTP server ${hostname} to IP for whitelisting (implementation pending)`);
 	}
 
+	conn.close();
 	return res;
 }
 
