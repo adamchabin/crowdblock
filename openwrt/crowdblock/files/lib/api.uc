@@ -54,7 +54,7 @@ function read_file(path) {
 }
 
 // Returns {} on 200, { not_modified: true } on 304, or { error }.
-function download(cfg, url, file, errfile, etag) {
+function download(cfg, url, file, errfile, etag, post) {
 	// Not -q: it would also hide the "HTTP error <status>" line.
 	let argv = [
 		'uclient-fetch', '-O', file,
@@ -65,7 +65,10 @@ function download(cfg, url, file, errfile, etag) {
 	if (!cfg.verify_tls)
 		push(argv, '--no-check-certificate');
 
-	if (supports_header()) {
+	if (post) {
+		push(argv, '--header=Content-Type: application/json', '--post-data=' + post);
+	}
+	else if (supports_header()) {
 		// The list is ~7x smaller gzipped. uclient-fetch doesn't unpack it,
 		// each_entry() does.
 		push(argv, '--header=Accept-Encoding: gzip');
@@ -464,4 +467,43 @@ function fetch_blocklist(cfg, etag) {
 	};
 }
 
-export { fetch_blocklist, each_entry };
+// POST /api/v1/reports: tells the server that `ip` attacked this router
+// (`source` = what detected it, e.g. "auth"). Returns { blacklisted } or
+// { error } - with `rejected` when the server refused the report itself (4xx),
+// as opposed to a network / server failure that is worth retrying.
+function report_ip(cfg, ip, source) {
+	// The key only goes in a header here (the server has no Basic auth for POST).
+	if (!supports_header())
+		return { error: 'reporting needs a uclient-fetch with --header support' };
+
+	let dir = mkdtemp(TMP_DIR + '/report.XXXXXX');
+	if (!dir)
+		return { error: 'cannot create a temporary directory in ' + TMP_DIR };
+
+	let body = dir + '/body', errfile = dir + '/err';
+	let res;
+
+	try {
+		let r = download(cfg, cfg.server + '/api/v1/reports', body, errfile, null,
+			sprintf('%J', { ip, source }));
+
+		if (r.error) {
+			res = { error: r.error, rejected: !!match(r.error, /^server returned HTTP 4/) };
+		}
+		else {
+			let d;
+			try { d = json(read_file(body) ?? ''); } catch (e) { }
+			res = { blacklisted: !!d?.blacklisted };
+		}
+	} catch (e) {
+		res = { error: e.message || 'unexpected error' };
+	}
+
+	unlink(body);
+	unlink(errfile);
+	rmdir(dir);
+
+	return res;
+}
+
+export { fetch_blocklist, each_entry, report_ip };

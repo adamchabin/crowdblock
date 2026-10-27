@@ -66,6 +66,8 @@ function load() {
 		verify_tls:    bool_opt(s.verify_tls, true),
 		debug:         bool_opt(s.debug, false),
 		state_file:    trim(s.state_file ?? ''),
+		report_attacks:   bool_opt(s.report_attacks, false),
+		report_threshold: int_opt(s.report_threshold, 5, 1, 1000),
 		whitelist:     (type(wl) == 'array') ? wl : [ wl ],
 		static_block:  (type(sb) == 'array') ? sb : [ sb ],
 	};

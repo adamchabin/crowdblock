@@ -164,6 +164,22 @@ uci commit crowdblock
 /etc.init.d/crowdblock start
 ```
 
+### Reporting attackers:
+The router can also feed the blocklist, not just use it:
+```bash
+crowdblock report 203.0.113.9 auth   # report one address (source defaults to "manual")
+
+# or automatically: failed SSH (dropbear) logins from the system log
+uci set crowdblock.main.report_attacks='1'
+uci set crowdblock.main.report_threshold='5'   # failures before an address is reported
+uci commit crowdblock
+/etc/init.d/crowdblock restart
+```
+The log is scanned every 5 minutes. Only public addresses are reported (never
+private, reserved, whitelisted, the router's own or the server's), each at most
+once a day, and at most 20 per scan. Needs a `uclient-fetch` with `--header`
+support (the API key travels in the `X-API-Key` header).
+
 ### Keeping blocks across reboots:
 The state lives in RAM (`/tmp`), so after a reboot nothing is blocked until the
 first successful sync. To keep the blocks, set a file for a copy of them:

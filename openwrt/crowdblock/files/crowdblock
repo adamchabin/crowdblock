@@ -6,6 +6,7 @@
 //   crowdblock sync --dry-run   show what would be blocked, change nothing
 //   crowdblock status    show state and drop counters
 //   crowdblock teardown  remove nftables table (unblocks everything)
+//   crowdblock report IP [SOURCE]  tell the server that IP attacked this router
 //   crowdblock pause IP  stop blocking IP (until resumed)
 //   crowdblock resume IP block a paused IP again
 'use strict';
@@ -17,7 +18,7 @@ import { rand, srand } from 'math';
 import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
 import { debug, info, warn_log, error_log, ms_since } from 'crowdblock.logging';
 import { whitelist, whitelisted, parse_cidr } from 'crowdblock.ip';
-import { fetch_blocklist, each_entry, VERSION } from 'crowdblock.api';
+import { fetch_blocklist, each_entry, report_ip, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
 
 const STATE_DIR = '/tmp/crowdblock';
@@ -683,6 +684,98 @@ function sync(cfg, real, dry_run) {
 	}
 }
 
+// --- reporting ----------------------------------------------------------
+
+const SOURCE_PATTERN = /^[a-z0-9_-]{1,32}$/;
+const REPORT_INTERVAL = 300;      // log scan, seconds
+const REPORT_AGAIN = 86400;       // the same address is reported once a day
+const MAX_REPORTS_PER_SCAN = 20;  // don't flood the server after a long scan outage
+
+// Returns null if `ip` may be reported, else the reason it may not: only
+// public addresses, and never our own / whitelisted ones.
+function report_refusal(cfg, ip, wl) {
+	let bytes = iptoarr(ip);
+	if (!bytes)
+		return 'not an IP address';
+
+	if (whitelisted(wl ?? build_whitelist(cfg), bytes))
+		return 'private, reserved or whitelisted address';
+
+	return null;
+}
+
+// "1.2.3.4" -> count of failed SSH logins in the system log (dropbear):
+//   Bad password attempt for 'root' from 203.0.113.9:44322
+//   Login attempt for nonexistent user from 203.0.113.9:44322
+function failed_logins() {
+	let counts = {};
+	let p = fs.popen('logread -e dropbear 2>/dev/null', 'r');
+	if (!p)
+		return counts;
+
+	for (let line = p.read('line'); length(line); line = p.read('line')) {
+		let m = match(line, /(Bad password attempt for|Login attempt for nonexistent user).* from ([0-9a-fA-F:.]+):[0-9]+/);
+		if (!m)
+			continue;
+
+		let bytes = iptoarr(m[2]);
+		if (bytes) {
+			let ip = arrtoip(bytes);
+			counts[ip] = (counts[ip] ?? 0) + 1;
+		}
+	}
+	p.close();
+
+	return counts;
+}
+
+// One scan: reports every address with at least cfg.report_threshold failures
+// that wasn't reported in the last REPORT_AGAIN seconds. `reported` is
+// { ip: time } kept by the daemon.
+function scan_log(cfg, reported) {
+	let now = time();
+
+	for (let ip in keys(reported))
+		if (reported[ip] + REPORT_AGAIN <= now)
+			delete reported[ip];
+
+	let wl = null;  // built when the first candidate shows up
+	let sent = 0;
+	for (let ip, n in failed_logins()) {
+		if (n < cfg.report_threshold || exists(reported, ip))
+			continue;
+
+		if (wl == null)
+			wl = build_whitelist(cfg);
+		let why = report_refusal(cfg, ip, wl);
+		if (why) {
+			debug(cfg, 'report: not reporting %s: %s', ip, why);
+			reported[ip] = now;
+			continue;
+		}
+
+		if (sent >= MAX_REPORTS_PER_SCAN) {
+			debug(cfg, 'report: %d reports sent, the rest in the next scan', sent);
+			break;
+		}
+
+		let res = report_ip(cfg, ip, 'auth');
+		if (res.error) {
+			warn_log('report %s failed: %s', ip, res.error);
+			// A refused report would be refused again; a network error is retried.
+			if (res.rejected)
+				reported[ip] = now;
+			else
+				break;
+			continue;
+		}
+
+		reported[ip] = now;
+		sent++;
+		info('reported %s (%d failed SSH logins)%s', ip, n, res.blacklisted ? ', now on the blocklist' : '');
+	}
+}
+
 // --- commands -------------------------------------------------------------
 
 function jitter(sec, pct) {
@@ -733,6 +826,21 @@ function cmd_run(cfg) {
 		}
 	});
 
+	if (cfg.report_attacks) {
+		let reported = {};
+		let scan_timer;
+
+		info('reporting attackers: %d failed SSH logins, scan every %ds', cfg.report_threshold, REPORT_INTERVAL);
+		scan_timer = uloop.timer(60000 + rand() % 30000, function() {
+			try {
+				scan_log(cfg, reported);
+			} catch (e) {
+				error_log('log scan failed: %s', e.message);
+			}
+			scan_timer.set(REPORT_INTERVAL * 1000);
+		});
+	}
+
 	uloop.run();
 }
 
@@ -751,6 +859,29 @@ function cmd_sync(cfg, dry_run) {
 	}
 
 	exit(sync(cfg, st, dry_run) ? 0 : 1);
+}
+
+function cmd_report(cfg, arg, source) {
+	if (source == null)
+		source = 'manual';
+
+	if (!match(source, SOURCE_PATTERN))
+		fatal('invalid source (up to 32 characters a-z, 0-9, _ and -)');
+
+	let bytes = iptoarr(arg ?? '');
+	if (!bytes)
+		fatal(`invalid IP address: ${arg}`);
+
+	let ip = arrtoip(bytes);
+	let why = report_refusal(cfg, ip);
+	if (why)
+		fatal(`not reporting ${ip}: ${why}`);
+
+	let res = report_ip(cfg, ip, source);
+	if (res.error)
+		fatal(`report failed: ${res.error}`);
+
+	log('reported %s (source %s)%s', ip, source, res.blacklisted ? ', now on the blocklist' : '');
 }
 
 // The paused list is the source of truth; the nft change applies it right
@@ -808,7 +939,7 @@ function cmd_status() {
 }
 
 function usage() {
-	warn('Usage: crowdblock run|sync [--dry-run]|status|teardown|pause IP|resume IP\n');
+	warn('Usage: crowdblock run|sync [--dry-run]|status|teardown|report IP [SOURCE]|pause IP|resume IP\n');
 	exit(1);
 }
 
@@ -827,13 +958,15 @@ else if (command == 'teardown') {
 else if (command == 'pause' || command == 'resume') {
 	cmd_pause(ARGV[1], command == 'pause');
 }
-else if (command == 'run' || command == 'sync') {
+else if (command == 'run' || command == 'sync' || command == 'report') {
 	let res = load_config();
 	if (res.error)
 		fatal(`config error: ${res.error}`);
 
 	if (command == 'run')
 		cmd_run(res.cfg);
+	else if (command == 'report')
+		cmd_report(res.cfg, ARGV[1], ARGV[2]);
 	else if (ARGV[1] == '--dry-run' || ARGV[1] == null)
 		cmd_sync(res.cfg, ARGV[1] == '--dry-run');
 	else
