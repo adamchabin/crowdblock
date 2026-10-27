@@ -81,30 +81,44 @@ function save_state(st) {
 // Lock file to prevent concurrent sync operations
 const LOCK_FILE = '/tmp/crowdblock.sync.lock';
 
+// A lock file older than this is assumed to belong to a process that died
+// while holding it (killed, OOM, power loss) rather than one still syncing -
+// sync() normally finishes in well under a minute - so it's stolen instead of
+// blocking every future sync forever.
+const STALE_LOCK_AGE = 600; // 10 minutes
+
+// Returns the age of the lock file in seconds, or null if it doesn't exist.
+function lock_age() {
+	let st = fs.stat(LOCK_FILE);
+	return st ? time() - st.mtime : null;
+}
+
 // Acquire lock with timeout (in seconds)
 // Returns true if lock acquired, false if timeout
 function acquire_lock(timeout_sec) {
 	let start = time();
-	let lock_path = LOCK_FILE;
-	
+
 	while (true) {
-		// Try to open the lock file for reading: if it exists, lock is held
-		let fd = fs.open(lock_path, 'r');
-		if (fd) {
-			fd.close();
+		let age = lock_age();
+		if (age != null && age < STALE_LOCK_AGE) {
+			// Held by another (presumably still running) process.
 			let elapsed = time() - start;
 			if (elapsed >= timeout_sec)
 				return false; // Timeout
 			sleep(1);
 			continue;
 		}
-		// Lock file does not exist: create it exclusively
-		fd = fs.open(lock_path, 'w');
+		if (age != null)
+			warn_log('sync lock stale (%ds old), assuming the previous holder died, taking it', age);
+
+		// Lock file does not exist, or is stale: (re)create it.
+		fs.unlink(LOCK_FILE);
+		let fd = fs.open(LOCK_FILE, 'w');
 		if (fd) {
 			fd.close();
 			return true; // Lock acquired
 		}
-		// Race: another process created it between stat and open
+		// Race: another process created it between the check above and here.
 		let elapsed = time() - start;
 		if (elapsed >= timeout_sec)
 			return false;

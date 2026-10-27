@@ -111,21 +111,19 @@ func MaybeBlacklist(ctx context.Context, ip, userID string) (bool, error) {
 	now := time.Now()
 	cutoff := now.Add(-BlacklistWindow)
 
-	if err := RDB.ZAdd(ctx, key, redis.Z{Score: float64(now.Unix()), Member: userID}).Err(); err != nil {
-		return false, fmt.Errorf("redis ZADD: %w", err)
-	}
-	if err := RDB.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(cutoff.Unix(), 10)).Err(); err != nil {
-		return false, fmt.Errorf("redis ZREMRANGEBYSCORE: %w", err)
-	}
-	if err := RDB.Expire(ctx, key, BlacklistWindow).Err(); err != nil {
-		return false, fmt.Errorf("redis EXPIRE: %w", err)
-	}
-
-	distinctReporters64, err := RDB.ZCard(ctx, key).Result()
+	// One round trip instead of four: ZADD, ZREMRANGEBYSCORE and EXPIRE don't
+	// depend on each other's results, and ZCARD only needs the final state.
+	cmds, err := RDB.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.Unix()), Member: userID})
+		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(cutoff.Unix(), 10))
+		pipe.Expire(ctx, key, BlacklistWindow)
+		pipe.ZCard(ctx, key)
+		return nil
+	})
 	if err != nil {
-		return false, fmt.Errorf("redis ZCARD: %w", err)
+		return false, fmt.Errorf("redis pipeline: %w", err)
 	}
-	distinctReporters := int(distinctReporters64)
+	distinctReporters := int(cmds[3].(*redis.IntCmd).Val())
 
 	if distinctReporters < BlacklistThreshold {
 		return false, nil
@@ -213,6 +211,43 @@ func QueryIPList(ctx context.Context, minutes, minReporters int) ([]IPListEntry,
 		result = append(result, e)
 	}
 	return result, rows.Err()
+}
+
+// PruneReports deletes ip_reports rows older than `retain`. Reports past the
+// largest list window (see list.AllowedMinutes) are never read again, but
+// without this the table (and its indexes) would grow forever.
+func PruneReports(ctx context.Context, retain time.Duration) (int64, error) {
+	tag, err := DB.Exec(ctx,
+		`DELETE FROM ip_reports WHERE reported_at < now() - $1::int * interval '1 second'`,
+		int(retain.Seconds()),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// RunReportPruner deletes expired ip_reports rows every `interval` until ctx
+// is done.
+func RunReportPruner(ctx context.Context, retain, interval time.Duration) error {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			n, err := PruneReports(ctx, retain)
+			if err != nil {
+				slog.Error("report pruning failed", "err", err)
+				continue
+			}
+			if n > 0 {
+				slog.Info("pruned old ip_reports", "deleted", n, "retain", retain)
+			}
+		}
+	}
 }
 
 // IsPublicIP rejects addresses that must never reach a blocklist: private,

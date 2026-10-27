@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -107,8 +108,10 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/account", api.HandleDeleteAccount)
 	mux.HandleFunc("POST /api/v1/reports", api.HandleReportIP)
 	mux.HandleFunc("GET /api/v1/ips", api.HandleListIPs)
-	mux.HandleFunc("GET /api/v1/geoip/{ip}", api.HandleGeoIP)
-	mux.HandleFunc("POST /api/v1/geoip/batch", api.HandleGeoIPBatch)
+	// geoip is unauthenticated, so it's the one endpoint group with no built-in
+	// cost (no API key, no per-user limit): rate-limit it per remote address.
+	mux.Handle("GET /api/v1/geoip/{ip}", api.RateLimit("geoip", 120, time.Minute, http.HandlerFunc(api.HandleGeoIP)))
+	mux.Handle("POST /api/v1/geoip/batch", api.RateLimit("geoip-batch", 30, time.Minute, http.HandlerFunc(api.HandleGeoIPBatch)))
 	mux.HandleFunc("GET /api/v1/world", api.HandleWorld)
 
 	addr := os.Getenv("LISTEN_ADDR")
@@ -119,6 +122,14 @@ func main() {
 	// List generator
 	g.Go(func() error {
 		return list.RunListGenerator(ctx, list.RefreshInterval())
+	})
+
+	// Report pruner: ip_reports is append-only otherwise, growing forever even
+	// though nothing past the largest list window is ever read again.
+	g.Go(func() error {
+		maxWindow := time.Duration(slices.Max(list.AllowedMinutes)) * time.Minute
+		retain := maxWindow + time.Hour // safety margin over the largest window
+		return db.RunReportPruner(ctx, retain, time.Hour)
 	})
 
 	// HTTP server: shut down when the signal context ends, otherwise

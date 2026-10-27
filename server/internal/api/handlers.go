@@ -217,15 +217,20 @@ func registerByEmail(w http.ResponseWriter, r *http.Request, rawEmail string) {
 		// Sent in the background so the response time doesn't depend on SMTP.
 		// If the mail can't be sent the account is removed again, so the user
 		// can register again instead of owning a password nobody received.
-		go func(ctx context.Context, userID, email, password, mailKey string) {
-			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		// Uses context.Background(), not r.Context(): the request (and its
+		// context, via TimeoutMiddleware) is done as soon as this handler
+		// returns, which happens right after this goroutine starts, so a
+		// context derived from it would already be canceled by the time the
+		// cleanup below runs, silently breaking it.
+		go func(userID, email, password, mailKey string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := sendPasswordMail(email, password); err != nil {
 				slog.Warn("registration mail failed", "email", email, "err", err)
 				_, _ = db.DB.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 				db.RDB.Del(ctx, mailKey)
 			}
-		}(r.Context(), userID, email, password, mailKey)
+		}(userID, email, password, mailKey)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"message": reply})
 }

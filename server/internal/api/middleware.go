@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"server/internal/db"
 )
 
 // logNotes are details a handler adds to its request's log line, e.g.
@@ -143,6 +146,37 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// RateLimit limits a handler to `limit` requests per remote address per
+// `window`, using a Redis counter (shared across instances, unlike an
+// in-process limiter). Intended for endpoints that need no authentication
+// (e.g. geoip), which would otherwise have no protection against flooding at
+// all. On a Redis error the request is let through: availability of the
+// endpoint matters more than the limit when the cache is down.
+func RateLimit(name string, limit int, window time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		key := fmt.Sprintf("ratelimit:%s:%s", name, host)
+
+		n, err := db.RDB.Incr(r.Context(), key).Result()
+		if err != nil {
+			slog.Warn("rate limit check failed, allowing request", "name", name, "err", err)
+			next.ServeHTTP(w, r)
+			return
+		}
+		if n == 1 {
+			db.RDB.Expire(r.Context(), key, window)
+		}
+		if n > int64(limit) {
+			http.Error(w, "too many requests, try again later", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // apiKeyFromRequest returns the API key from the X-API-Key header or, for
