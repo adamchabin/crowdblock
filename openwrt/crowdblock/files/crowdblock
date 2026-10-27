@@ -15,7 +15,7 @@ import { rand, srand } from 'math';
 
 import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
 import { debug, info, warn_log, error_log, ms_since } from 'crowdblock.logging';
-import { whitelist, whitelisted } from 'crowdblock.ip';
+import { whitelist, whitelisted, parse_cidr } from 'crowdblock.ip';
 import { fetch_blocklist, each_entry, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
 
@@ -34,6 +34,7 @@ function fatal(msg) {
 
 // --- state: { entries: { ip: expires_at }, reports: { ip: count },
 //              countries: { ip: "CN" }, sources: { ip: [ "auth", ... ] },
+//              static: { ip: true } (added from the static_block option),
 //              list_etag, last_sync, last_error } -------------------------
 // `reports`, `countries` and `sources` are from the last time the address
 // was on the server list (shown in LuCI). `list_etag` identifies the list
@@ -52,7 +53,7 @@ function load_state() {
 		st = { entries: {}, last_sync: null, last_error: null };
 
 	// Maps added in later versions.
-	for (let k in [ 'reports', 'countries', 'sources' ])
+	for (let k in [ 'reports', 'countries', 'sources', 'static' ])
 		if (type(st[k]) != 'object')
 			st[k] = {};
 
@@ -73,23 +74,24 @@ function save_state(st) {
 
 	f.write(sprintf('%J', st));
 	f.close();
-	system('mv ' + tmp + ' ' + STATE_FILE);
+	fs.rename(tmp, STATE_FILE);
 }
 
 // --- locking ------------------------------------------------------------
 
-// Lock file to prevent concurrent sync operations
-const LOCK_FILE = '/tmp/crowdblock.sync.lock';
+// The lock is a directory: mkdir() is atomic, so of several processes (the
+// daemon, `crowdblock sync` from cron) trying at once exactly one succeeds.
+const LOCK_DIR = '/tmp/crowdblock.sync.lock.d';
 
-// A lock file older than this is assumed to belong to a process that died
-// while holding it (killed, OOM, power loss) rather than one still syncing -
-// sync() normally finishes in well under a minute - so it's stolen instead of
+// A lock older than this is assumed to belong to a process that died while
+// holding it (killed, OOM, power loss) rather than one still syncing - sync()
+// normally finishes in well under a minute - so it's stolen instead of
 // blocking every future sync forever.
 const STALE_LOCK_AGE = 600; // 10 minutes
 
-// Returns the age of the lock file in seconds, or null if it doesn't exist.
+// Returns the age of the lock in seconds, or null if it doesn't exist.
 function lock_age() {
-	let st = fs.stat(LOCK_FILE);
+	let st = fs.stat(LOCK_DIR);
 	return st ? time() - st.mtime : null;
 }
 
@@ -99,36 +101,32 @@ function acquire_lock(timeout_sec) {
 	let start = time();
 
 	while (true) {
+		if (fs.mkdir(LOCK_DIR))
+			return true;
+
 		let age = lock_age();
-		if (age != null && age < STALE_LOCK_AGE) {
-			// Held by another (presumably still running) process.
-			let elapsed = time() - start;
-			if (elapsed >= timeout_sec)
-				return false; // Timeout
-			sleep(1);
-			continue;
-		}
-		if (age != null)
+		if (age != null && age >= STALE_LOCK_AGE) {
 			warn_log('sync lock stale (%ds old), assuming the previous holder died, taking it', age);
 
-		// Lock file does not exist, or is stale: (re)create it.
-		fs.unlink(LOCK_FILE);
-		let fd = fs.open(LOCK_FILE, 'w');
-		if (fd) {
-			fd.close();
-			return true; // Lock acquired
+			// Rename first: only one of several processes finding the lock
+			// stale succeeds, so none removes a lock that another has just
+			// taken over.
+			let old = LOCK_DIR + '.stale.' + getpid();
+			if (fs.rename(LOCK_DIR, old))
+				fs.rmdir(old);
+			continue;
 		}
-		// Race: another process created it between the check above and here.
-		let elapsed = time() - start;
-		if (elapsed >= timeout_sec)
+
+		// Held by another (presumably still running) process.
+		if (time() - start >= timeout_sec)
 			return false;
 		sleep(1);
 	}
 }
 
-// Release lock by removing the lock file
+// Release lock by removing the lock directory
 function release_lock() {
-	fs.unlink(LOCK_FILE);
+	fs.rmdir(LOCK_DIR);
 }
 
 // --- whitelist ----------------------------------------------------------
@@ -244,6 +242,7 @@ function forget(st, ip) {
 	delete st.reports[ip];
 	delete st.countries[ip];
 	delete st.sources[ip];
+	delete st.static[ip];
 }
 
 let last_expire_check = 0;
@@ -335,6 +334,7 @@ function merge(cfg, st, wl, now) {
 
 	// Static blocklist: addresses from /etc/config/crowdblock that are
 	// always blocked, independently of the server.
+	let configured = {};
 	for (let entry in cfg.static_block) {
 		let v = trim('' + entry);
 		if (v == '')
@@ -349,10 +349,14 @@ function merge(cfg, st, wl, now) {
 			continue;
 		if (exists(st.entries, ip)) {
 			st.entries[ip] = now + cfg.block_time;
+			st.static[ip] = true;
+			configured[ip] = true;
 			stats.refreshed++;
 		}
 		else if (count < cfg.max_entries) {
 			st.entries[ip] = now + cfg.block_time;
+			st.static[ip] = true;
+			configured[ip] = true;
 			stats.added++;
 			push(seen.added, ip);
 			count++;
@@ -361,6 +365,24 @@ function merge(cfg, st, wl, now) {
 			stats.full++;
 			push(seen.full, ip);
 		}
+	}
+
+	// Addresses removed from static_block: unblock them now rather than
+	// leaving them to run out block_time. One that is also on the server list
+	// (it has a report count) stays blocked, just no longer as a static one.
+	stats.removed = 0;
+	for (let ip in keys(st.static)) {
+		if (configured[ip])
+			continue;
+		if (exists(st.reports, ip)) {
+			delete st.static[ip];
+		}
+		else {
+			forget(st, ip);
+			nft.unblock(ip);  // fails if it isn't blocked right now - nothing to undo
+			stats.removed++;
+		}
+		state_dirty = true;
 	}
 
 	debug(cfg, 'merge: %d on the list: %d new, %d refreshed, %d whitelisted, %d below min_reports, %d invalid, %d over max_entries',
@@ -447,7 +469,7 @@ function sync(cfg, st) {
 			state_dirty = true;
 		}
 		let stats = merge(cfg, st, wl, now);
-		if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0)
+		if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0 || stats.removed > 0)
 			state_dirty = true;
 
 		if (stats.error) {
