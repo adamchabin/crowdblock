@@ -28,6 +28,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # monthly). Mount a newer one over /app/geoip/dbip-country-lite.mmdb or set
 # GEOIP_DB to update it without a rebuild.
 FROM --platform=$BUILDPLATFORM alpine:3 AS geoip
+# TODO(adam): verify a checksum of the downloaded GeoIP DB and pin base images by digest (security.md #11).
 RUN apk add --no-cache curl \
     && mkdir /geoip \
     && curl -sSf "https://download.db-ip.com/free/dbip-country-lite-$(date -u +%Y-%m).mmdb.gz" \

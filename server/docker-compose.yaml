@@ -4,6 +4,7 @@ services:
     container_name: pg
     environment:
       POSTGRES_USER: postgres
+      # FIXME(adam): default password and 5432/6379 published on all interfaces - bind to 127.0.0.1, add REDIS_PASSWORD (security.md #2, #7).
       POSTGRES_PASSWORD: password
       POSTGRES_DB: crowdblock
     ports:
@@ -49,6 +50,7 @@ services:
     environment:
       DATABASE_URL: postgres://postgres:password@postgres:5432/crowdblock?sslmode=disable
       REDIS_ADDR: redis:6379
+      # FIXME(adam): SEED_DEV_DATA creates accounts with known passwords/keys - must be off in production (security.md #2).
       SEED_DEV_DATA: "1"   # test users and keys, sample reports (seed.sql)
       DEBUG: "false"
       # Registration by e-mail (the Register button) needs all four. Taken from

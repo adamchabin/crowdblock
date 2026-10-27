@@ -1,12 +1,22 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"log/slog"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// IsUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505).
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 
 // IsDBError reports whether err is a database (Postgres) error, so handlers
 // can return 503 Service Unavailable instead of a generic 500.

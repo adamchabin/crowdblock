@@ -101,6 +101,7 @@ func main() {
 	mux.HandleFunc("GET /{$}", api.HandleUI)
 	mux.HandleFunc("GET /api/v1/stats", api.HandleStats)
 	mux.HandleFunc("GET /api/v1/health", api.HandleHealth)
+	// TODO(adam): rate-limit register, api-keys, reports and ips like geoip below (bcrypt CPU DoS, password brute force, cheap full-list download); see security.md #1, #10.
 	mux.HandleFunc("POST /api/v1/register", api.HandleRegister)
 	mux.HandleFunc("POST /api/v1/api-keys", api.HandleCreateAPIKey)
 	mux.HandleFunc("GET /api/v1/api-keys", api.HandleListAPIKeys)

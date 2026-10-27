@@ -113,8 +113,9 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 		registerByEmail(w, r, req.Email)
 		return
 	}
-	if len(req.Password) < 8 {
-		http.Error(w, "invalid data (email + password min. 8 characters)", http.StatusBadRequest)
+	// bcrypt only uses the first 72 bytes and newer x/crypto rejects longer input.
+	if len(req.Password) < 8 || len(req.Password) > 72 {
+		http.Error(w, "invalid data (email + password, 8-72 bytes)", http.StatusBadRequest)
 		return
 	}
 
@@ -134,7 +135,12 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 			db.ServiceUnavailable(w, "postgres", err)
 			return
 		}
-		http.Error(w, "email already taken or database error", http.StatusConflict)
+		if db.IsUniqueViolation(err) {
+			http.Error(w, "email already taken", http.StatusConflict)
+			return
+		}
+		slog.Error("register: insert user failed", "err", err)
+		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -501,7 +507,10 @@ func HandleReportIP(w http.ResponseWriter, r *http.Request) {
 			db.ServiceUnavailable(w, "postgres", err)
 			return
 		}
-		http.Error(w, "invalid IP address or database error", http.StatusBadRequest)
+		// The input was validated above, so a remaining error is a server fault.
+		slog.Error("report: insert failed", "ip", req.IP, "err", err)
+		// TODO(adam): cap reports per user per IP (security.md #6).
+		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
 
