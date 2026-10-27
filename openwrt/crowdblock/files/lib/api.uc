@@ -270,7 +270,7 @@ function apply_delta(cfg, file, dir) {
 
 	if (type(d) != 'object' || type(d.etag) != 'string' || type(d.count) != 'int' ||
 	    type(d.set_hash) != 'string' || type(d.upsert) != 'array' || type(d.remove) != 'array')
-		return { error: sprintf('invalid delta: %s', e.message || 'unknown error') };
+		return { error: 'malformed delta response', retry_full: true };
 
 	let drop = {};
 	for (let ip in d.remove)

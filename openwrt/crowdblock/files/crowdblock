@@ -133,6 +133,53 @@ function release_lock() {
 
 // --- whitelist ----------------------------------------------------------
 
+const ntp_servers = [ 'time.google.com', 'time.windows.com', 'pool.ntp.org' ];
+
+// Resolved addresses are cached: a sync every few minutes must not run
+// nslookup (and wait out its timeout when DNS is down) for every host each time.
+const RESOLVE_TTL = 3600;        // successful lookup
+const RESOLVE_RETRY = 600;       // failed lookup
+let resolved = {};
+
+// Addresses of `host` (an IP literal is returned as is), best effort: [] if
+// it can't be resolved. Uses busybox nslookup, which every OpenWrt has.
+function resolve(cfg, host) {
+	if (iptoarr(host))
+		return [ host ];
+
+	// The name goes into a shell command line.
+	if (!match(host, /^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/))
+		return [];
+
+	let now = time();
+	let c = resolved[host];
+	if (c && c.until > now)
+		return c.ips;
+
+	let ips = [];
+	let p = fs.popen(`nslookup ${host} 2>/dev/null`, 'r');
+	if (p) {
+		let in_answer = false;  // skip the "Server:/Address:" lines of the resolver
+		for (let line = p.read('line'); line; line = p.read('line')) {
+			if (match(line, /^Name:/)) {
+				in_answer = true;
+				continue;
+			}
+			let a = in_answer ? match(line, /^Address( [0-9]+)?:[ \t]*([^ \t]+)/) : null;
+			if (a) {
+				let ip = replace(a[2], /#[0-9]+$/, '');
+				if (iptoarr(ip))
+					push(ips, ip);
+			}
+		}
+		p.close();
+	}
+
+	debug(cfg, 'whitelist: %s resolves to %s', host, length(ips) ? join(', ', ips) : 'nothing');
+	resolved[host] = { ips, until: now + (length(ips) ? RESOLVE_TTL : RESOLVE_RETRY) };
+	return ips;
+}
+
 // The router's own addresses, delegated prefixes and upstream DNS servers.
 function local_addresses(cfg) {
 	let res = [];
@@ -161,30 +208,21 @@ function local_addresses(cfg) {
 			push(res, a);
 	}
 
-	// Whitelist the crowdblock server itself (best effort, ucode globals only)
-	if (cfg && cfg.server) {
-		try {
-			let m = match(trim(cfg.server), /^https?:\/\/([^\/\?#:]+)/);
-			if (m)
-				info(`Would resolve crowdblock server ${m[1]} to IP for whitelisting (implementation pending)`);
-		} catch (e) {
-			info(`Could not resolve crowdblock server for whitelisting: ${e.message}`);
-		}
-	}
+	return res;
+}
 
-	// Add common NTP servers (best-effort, whitelisting is preventive)
-	// Note: In a full implementation, we would resolve hostnames to IPs
-	const commonNtpServers = [
-		'time.google.com',
-		'time.windows.com',
-		'pool.ntp.org'
-	];
-	
-	for (let i = 0; i < length(commonNtpServers); i++) {
-		let hostname = commonNtpServers[i];
-		// In a full implementation, we would resolve each hostname to IP(s) and add to res
-		info(`Would resolve NTP server ${hostname} to IP for whitelisting (implementation pending)`);
-	}
+// The crowdblock server and common NTP servers must never end up blocked, or
+// the router could no longer sync / keep its clock right.
+function server_addresses(cfg) {
+	let hosts = [ ...ntp_servers ];
+	let m = match(trim(cfg?.server ?? ''), /^https?:\/\/(\[([0-9a-fA-F:]+)\]|[^\/?#:]+)/);
+	if (m)
+		push(hosts, m[2] ?? m[1]);
+
+	let res = [];
+	for (let host in hosts)
+		for (let ip in resolve(cfg, host))
+			push(res, ip);
 
 	return res;
 }
@@ -192,7 +230,7 @@ function local_addresses(cfg) {
 function build_whitelist(cfg) {
 	let entries = [];
 
-	for (let list in [ cfg.whitelist, local_addresses(cfg) ])
+	for (let list in [ cfg.whitelist, local_addresses(cfg), server_addresses(cfg) ])
 		for (let e in list)
 			push(entries, e);
 
@@ -297,8 +335,8 @@ function merge(cfg, st, wl, now) {
 
 	// Static blocklist: addresses from /etc/config/crowdblock that are
 	// always blocked, independently of the server.
-	for (let e in cfg.static_block) {
-		let v = trim('' + cfg.static_block[e]);
+	for (let entry in cfg.static_block) {
+		let v = trim('' + entry);
 		if (v == '')
 			continue;
 		if (index(v, '/') >= 0)

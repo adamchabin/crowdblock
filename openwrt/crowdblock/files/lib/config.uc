@@ -86,8 +86,8 @@ function load() {
 		return { error: 'option report_window must be one of 1h, 6h, 24h, 7d' };
 
 	// Each static_block entry must be a valid IP address or CIDR.
-	for (let e in cfg.static_block) {
-		let v = trim('' + cfg.static_block[e]);
+	for (let entry in cfg.static_block) {
+		let v = trim('' + entry);
 		if (v == '')
 			continue;
 		let addr = v;
