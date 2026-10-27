@@ -164,6 +164,17 @@ uci commit crowdblock
 /etc.init.d/crowdblock start
 ```
 
+### Keeping blocks across reboots:
+The state lives in RAM (`/tmp`), so after a reboot nothing is blocked until the
+first successful sync. To keep the blocks, set a file for a copy of them:
+```bash
+uci set crowdblock.main.state_file='/etc/crowdblock/state.json'
+uci commit crowdblock
+```
+The copy is written at most every 6 hours (flash wear) and restored when the
+daemon starts with an empty state. Expiry times are kept safe against a router
+clock that is still wrong at boot (before NTP).
+
 ### Monitoring & Management:
 ```bash
 # Check status and statistics

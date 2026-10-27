@@ -65,6 +65,7 @@ function load() {
 		block_forward: bool_opt(s.block_forward, true),
 		verify_tls:    bool_opt(s.verify_tls, true),
 		debug:         bool_opt(s.debug, false),
+		state_file:    trim(s.state_file ?? ''),
 		whitelist:     (type(wl) == 'array') ? wl : [ wl ],
 		static_block:  (type(sb) == 'array') ? sb : [ sb ],
 	};
@@ -97,6 +98,11 @@ function load() {
 		if (!iptoarr(addr))
 			return { error: `option static_block contains invalid address: ${v}` };
 	}
+
+	// Where the blocked addresses are kept across reboots (the state itself is
+	// in RAM). Empty = off.
+	if (cfg.state_file != '' && !match(cfg.state_file, /^\/[A-Za-z0-9._\/-]+$/))
+		return { error: 'option state_file must be an absolute path (letters, digits, . _ - /)' };
 
 	// A block must outlive the next sync (with room for one failed sync),
 	// otherwise listed addresses are unblocked between syncs.

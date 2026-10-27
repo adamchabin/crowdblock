@@ -78,6 +78,100 @@ function save_state(st) {
 	fs.rename(tmp, STATE_FILE);
 }
 
+// --- persistence --------------------------------------------------------
+// The state lives in /tmp (RAM). With option state_file a copy of the blocks
+// is kept on flash/USB, so they are back right after a reboot instead of
+// only after the first successful sync.
+
+const PERSIST_INTERVAL = 6 * 3600;  // flash wear: don't write on every sync
+let last_persist = 0;
+
+// Copies the blocks to cfg.state_file, at most every PERSIST_INTERVAL.
+function persist_state(cfg, st) {
+	if (!cfg.state_file)
+		return;
+
+	let now = time();
+	if (now - last_persist < PERSIST_INTERVAL)
+		return;
+
+	fs.mkdir(fs.dirname(cfg.state_file), 0o700);
+
+	let tmp = cfg.state_file + '.tmp';
+	let f = fs.open(tmp, 'w');
+	if (!f) {
+		warn_log('cannot write %s', tmp);
+		return;
+	}
+
+	f.write(sprintf('%J', {
+		saved_at: now,
+		entries: st.entries, reports: st.reports, countries: st.countries,
+		sources: st.sources, static: st.static,
+	}));
+	f.close();
+
+	if (!fs.rename(tmp, cfg.state_file)) {
+		warn_log('cannot replace %s', cfg.state_file);
+		fs.unlink(tmp);
+		return;
+	}
+	last_persist = now;
+	debug(cfg, 'state saved to %s', cfg.state_file);
+}
+
+// Fills an empty state (fresh boot) from cfg.state_file. Returns the number
+// of restored addresses.
+function restore_state(cfg, st) {
+	if (!cfg.state_file || length(keys(st.entries)))
+		return 0;
+
+	let f = fs.open(cfg.state_file, 'r');
+	if (!f)
+		return 0;
+
+	let saved;
+	try { saved = json(f.read('all')); } catch (e) { }
+	f.close();
+
+	if (type(saved) != 'object' || type(saved.entries) != 'object' || type(saved.saved_at) != 'int') {
+		warn_log('ignoring %s: not a crowdblock state file', cfg.state_file);
+		return 0;
+	}
+
+	let now = time();
+	// A router without a battery clock starts in the past until NTP kicks in:
+	// then count the remaining time from when the file was written instead of
+	// trusting the absolute expiry (a block would last for years).
+	let shift = (now < saved.saved_at) ? now - saved.saved_at : 0;
+	let n = 0;
+
+	for (let ip, expires in saved.entries) {
+		if (n >= cfg.max_entries)
+			break;
+		if (!(type(expires) in [ 'int', 'double' ]) || !iptoarr(ip))
+			continue;
+
+		expires += shift;
+		if (expires <= now)
+			continue;
+		if (expires > now + cfg.block_time)
+			expires = now + cfg.block_time;
+
+		st.entries[ip] = expires;
+		n++;
+
+		for (let k in [ 'reports', 'countries', 'sources', 'static' ])
+			if (type(saved[k]) == 'object' && exists(saved[k], ip))
+				st[k][ip] = saved[k][ip];
+	}
+
+	if (n)
+		state_dirty = true;
+
+	return n;
+}
+
 // --- locking ------------------------------------------------------------
 
 // The lock is a directory: mkdir() is atomic, so of several processes (the
@@ -602,6 +696,13 @@ function cmd_run(cfg) {
 	if (err)
 		fatal(`cannot create nftables table: ${err}`);
 
+	let restored = restore_state(cfg, st);
+	if (restored) {
+		info('restored %d blocked addresses from %s', restored, cfg.state_file);
+		save_state(st);
+		last_persist = time();  // the file is current
+	}
+
 	// After a restart, restore what we had before the first download.
 	drop_expired(st, time());
 	err = nft.apply(st.entries, time(), load_paused());
@@ -620,6 +721,7 @@ function cmd_run(cfg) {
 	timer = uloop.timer(1000 + rand() % 30000, function() {
 		if (sync(cfg, st)) {
 			failures = 0;
+			persist_state(cfg, st);
 			timer.set(jitter(cfg.sync_interval, 10));
 		}
 		else {
