@@ -3,6 +3,7 @@
 //
 //   crowdblock run       daemon (started by /etc/init.d/crowdblock)
 //   crowdblock sync      one-shot download + apply
+//   crowdblock sync --dry-run   show what would be blocked, change nothing
 //   crowdblock status    show state and drop counters
 //   crowdblock teardown  remove nftables table (unblocks everything)
 //   crowdblock pause IP  stop blocking IP (until resumed)
@@ -273,7 +274,7 @@ function some(list, max) {
 // Merges the downloaded list into the state, entry by entry (the list is
 // never held in memory as a whole). Returns stats, with `error` if the list
 // couldn't be read.
-function merge(cfg, st, wl, now) {
+function merge(cfg, st, wl, now, dry_run) {
 	let stats = { added: 0, refreshed: 0, invalid: 0, whitelisted: 0, below: 0, full: 0 };
 	let seen = { added: [], whitelisted: [], below: [], full: [] };  // for debug
 	let count = length(keys(st.entries));
@@ -371,6 +372,7 @@ function merge(cfg, st, wl, now) {
 	// leaving them to run out block_time. One that is also on the server list
 	// (it has a report count) stays blocked, just no longer as a static one.
 	stats.removed = 0;
+	stats.new_ips = seen.added;
 	for (let ip in keys(st.static)) {
 		if (configured[ip])
 			continue;
@@ -379,7 +381,8 @@ function merge(cfg, st, wl, now) {
 		}
 		else {
 			forget(st, ip);
-			nft.unblock(ip);  // fails if it isn't blocked right now - nothing to undo
+			if (!dry_run)
+				nft.unblock(ip);  // fails if it isn't blocked right now - nothing to undo
 			stats.removed++;
 		}
 		state_dirty = true;
@@ -423,8 +426,40 @@ function purge_whitelisted(st, wl) {
 	return n;
 }
 
-// Returns true on success.
-function sync(cfg, st) {
+// What a dry run would have done, on stdout.
+function report_dry_run(cfg, st, stats, paused) {
+	let now = time();
+	let ips = stats.new_ips;
+	let n = length(keys(st.entries));
+
+	log('dry run: nothing was changed (no nftables update, state not saved)');
+	log('would block %d addresses in total: %d new, %d refreshed, %d removed from static_block',
+		n, stats.added, stats.refreshed, stats.removed);
+	log('skipped: %d whitelisted, %d below min_reports (%d), %d invalid, %d over max_entries (%d)',
+		stats.whitelisted, stats.below, cfg.min_reports, stats.invalid, stats.full, cfg.max_entries);
+
+	let p = 0;
+	for (let ip in keys(st.entries))
+		if (ip in paused)
+			p++;
+	if (p)
+		log('%d of them are paused and would stay unblocked', p);
+
+	if (length(ips)) {
+		log('new addresses:');
+		for (let ip in ips) {
+			let src = st.sources[ip] ? ' ' + join(',', st.sources[ip]) : '';
+			log('  %s  reports=%s country=%s%s', ip, st.reports[ip] ?? 'static', st.countries[ip] ?? '-', src);
+		}
+	}
+}
+
+// Returns true on success. With `dry_run` it works on a copy of the state and
+// only reports what would be blocked: nftables and the saved state stay as
+// they are (except the list etag, which belongs to the downloaded list file).
+function sync(cfg, real, dry_run) {
+	let st = dry_run ? json(sprintf('%J', real)) : real;
+	let persist = (s) => dry_run ? null : save_state(s);
 	let now = time();
 	let start = clock(true);
 	let expired = drop_expired(st, now);
@@ -456,7 +491,7 @@ function sync(cfg, st) {
 			// Nothing to do in nft: existing entries keep blocking until
 			// their kernel timeout runs out.
 			st.last_error = err;
-			save_state(st);
+			persist(st);
 			error_log('sync failed: %s', err);
 			release_lock_on_exit();
 			return false;
@@ -468,16 +503,29 @@ function sync(cfg, st) {
 			debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
 			state_dirty = true;
 		}
-		let stats = merge(cfg, st, wl, now);
+		let stats = merge(cfg, st, wl, now, dry_run);
 		if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0 || stats.removed > 0)
 			state_dirty = true;
 
 		if (stats.error) {
 			st.last_error = stats.error;
-			save_state(st);
+			persist(st);
 			error_log('sync failed: %s', stats.error);
 			release_lock_on_exit();
 			return false;
+		}
+
+		if (dry_run) {
+			// The downloaded list file is now the new one; keep its etag
+			// matching it (the next real sync merges from the file anyway).
+			if (real.list_etag != res.etag) {
+				real.list_etag = res.etag;
+				state_dirty = true;
+				save_state(real);
+			}
+			report_dry_run(cfg, st, stats, load_paused());
+			release_lock_on_exit();
+			return true;
 		}
 
 		// `/etc/init.d/firewall stop|restart` (fw4 flush) deletes all nftables
@@ -510,7 +558,7 @@ function sync(cfg, st) {
 		st.list_etag = res.etag;
 		st.last_sync = now;
 		st.last_error = err;
-		save_state(st);
+		persist(st);
 
 		if (err) {
 			error_log('nft update failed: %s', err);
@@ -586,12 +634,12 @@ function cmd_run(cfg) {
 	uloop.run();
 }
 
-function cmd_sync(cfg) {
+function cmd_sync(cfg, dry_run) {
 	let st = load_state();
 
 	// Recreating an existing table would drop the current blocks (also those
 	// of a running daemon) for as long as the download keeps failing.
-	if (!nft.exists()) {
+	if (!dry_run && !nft.exists()) {
 		let err = nft.setup(cfg);
 		if (err)
 			fatal(`cannot create nftables table: ${err}`);
@@ -600,7 +648,7 @@ function cmd_sync(cfg) {
 		nft.apply(st.entries, time(), load_paused());
 	}
 
-	exit(sync(cfg, st) ? 0 : 1);
+	exit(sync(cfg, st, dry_run) ? 0 : 1);
 }
 
 // The paused list is the source of truth; the nft change applies it right
@@ -658,7 +706,7 @@ function cmd_status() {
 }
 
 function usage() {
-	warn('Usage: crowdblock run|sync|status|teardown|pause IP|resume IP\n');
+	warn('Usage: crowdblock run|sync [--dry-run]|status|teardown|pause IP|resume IP\n');
 	exit(1);
 }
 
@@ -682,7 +730,12 @@ else if (command == 'run' || command == 'sync') {
 	if (res.error)
 		fatal(`config error: ${res.error}`);
 
-	(command == 'run') ? cmd_run(res.cfg) : cmd_sync(res.cfg);
+	if (command == 'run')
+		cmd_run(res.cfg);
+	else if (ARGV[1] == '--dry-run' || ARGV[1] == null)
+		cmd_sync(res.cfg, ARGV[1] == '--dry-run');
+	else
+		usage();
 }
 else {
 	usage();

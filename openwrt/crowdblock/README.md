@@ -169,6 +169,7 @@ uci commit crowdblock
 # Check status and statistics
 crowdblock status          # Shows block counts, last sync, nft counters
 crowdblock sync            # Force immediate synchronization
+crowdblock sync --dry-run  # Download the list and show what would be blocked, change nothing
 crowdblock pause 1.2.3.4   # Stop blocking specific IP (temporary)
 crowdblock resume 1.2.3.4  # Re-enable blocking for paused IP
 logread -e crowdblock      # View detailed daemon logs
