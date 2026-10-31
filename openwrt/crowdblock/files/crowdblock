@@ -37,7 +37,8 @@ function fatal(msg) {
 // --- state: { entries: { ip: expires_at }, reports: { ip: count },
 //              countries: { ip: "CN" }, sources: { ip: [ "auth", ... ] },
 //              static: { ip: true } (added from the static_block option),
-//              list_etag, last_sync, last_error } -------------------------
+//              list_etag, last_sync, last_error, failures (in a row),
+//              list_size (addresses on the last downloaded list) } --------
 // `reports`, `countries` and `sources` are from the last time the address
 // was on the server list (shown in LuCI). `list_etag` identifies the list
 // saved in /tmp/crowdblock/list.json (sent as If-None-Match).
@@ -328,7 +329,7 @@ function build_whitelist(cfg) {
 		for (let e in list)
 			push(entries, e);
 
-	return whitelist(entries, (e) => info('ignoring invalid whitelist entry: %s', e));
+	return whitelist(entries, (e) => warn_log('ignoring invalid whitelist entry: %s', e));
 }
 
 // --- sync ---------------------------------------------------------------
@@ -586,6 +587,7 @@ function sync(cfg, real, dry_run) {
 			// Nothing to do in nft: existing entries keep blocking until
 			// their kernel timeout runs out.
 			st.last_error = err;
+			state_dirty = true;  // `status` and LuCI read this from the state file
 			persist(st);
 			error_log('sync failed: %s', err);
 			release_lock_on_exit();
@@ -604,6 +606,7 @@ function sync(cfg, real, dry_run) {
 
 		if (stats.error) {
 			st.last_error = stats.error;
+			state_dirty = true;
 			persist(st);
 			error_log('sync failed: %s', stats.error);
 			release_lock_on_exit();
@@ -653,6 +656,8 @@ function sync(cfg, real, dry_run) {
 		st.list_etag = res.etag;
 		st.last_sync = now;
 		st.last_error = err;
+		st.list_size = stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full;
+		state_dirty = true;
 		persist(st);
 
 		if (err) {
@@ -668,11 +673,17 @@ function sync(cfg, real, dry_run) {
 			: res.delta_failed ? sprintf(' (full list, delta rejected: %s)', res.delta_failed)
 			: '';
 
-		info('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
+		let line = sprintf('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
 			how,
 			length(keys(st.entries)), stats.added, stats.refreshed,
 			stats.whitelisted, purged, stats.invalid,
 			stats.full ? sprintf(', %d dropped: max_entries reached', stats.full) : '');
+
+		// A sync that changed nothing runs every few minutes: debug only.
+		if (stats.added || stats.removed || stats.full || purged)
+			info('%s', line);
+		else
+			debug(cfg, '%s', line);
 
 		release_lock_on_exit();
 		return true;
@@ -824,6 +835,11 @@ function cmd_run(cfg) {
 			failures++;
 			timer.set(jitter(delay < cfg.sync_interval ? delay : cfg.sync_interval, 25));
 		}
+
+		// For `status` and LuCI (other processes).
+		st.failures = failures;
+		state_dirty = true;
+		save_state(st);
 	});
 
 	if (cfg.report_attacks) {
@@ -916,6 +932,18 @@ function cmd_pause(arg, pause) {
 	}
 }
 
+// Open file descriptors of a running process (null if it isn't running).
+// A count that only grows means a leak, e.g. of ubus connections in ubusd.
+function fd_count(name) {
+	let p = fs.popen('pidof ' + name + ' 2>/dev/null', 'r');
+	let pid = p ? trim(p.read('all') ?? '') : '';
+	if (p)
+		p.close();
+
+	let fds = match(pid, /^[0-9]+$/) ? fs.lsdir('/proc/' + pid + '/fd') : null;
+	return fds ? length(fds) : null;
+}
+
 function cmd_status() {
 	let st = load_state();
 	let now = time();
@@ -933,6 +961,9 @@ function cmd_status() {
 	info('blocked:    %d IPv4, %d IPv6 (%d paused)', v4, v6, p);
 	info('last sync:  %s', st.last_sync ? sprintf('%ds ago', now - st.last_sync) : 'never');
 	info('last error: %s', st.last_error ?? '-');
+	info('failures:   %d in a row', st.failures ?? 0);
+	info('list size:  %s', st.list_size != null ? '' + st.list_size : '-');
+	info('ubusd fds:  %s', fd_count('ubusd') ?? '-');
 
 	for (let line in nft.counters())
 		info('%s', line);

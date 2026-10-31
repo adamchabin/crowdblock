@@ -194,7 +194,7 @@ clock that is still wrong at boot (before NTP).
 ### Monitoring & Management:
 ```bash
 # Check status and statistics
-crowdblock status          # Shows block counts, last sync, nft counters
+crowdblock status          # Block counts, last sync, failures in a row, list size, ubusd fds, nft counters
 crowdblock sync            # Force immediate synchronization
 crowdblock sync --dry-run  # Download the list and show what would be blocked, change nothing
 crowdblock pause 1.2.3.4   # Stop blocking specific IP (temporary)
