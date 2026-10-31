@@ -12,16 +12,18 @@ let _log_rate_limit = 10; // seconds
  */
 function rate_limited_log(level, fmt, ...args) {
 	let now = time();
-	if (now - _last_log_time < _log_rate_limit &&
-	    sprintf(fmt, ...args) === _last_log_message) {
+	let msg = sprintf(fmt, ...args);
+
+	if (now - _last_log_time < _log_rate_limit && msg === _last_log_message)
 		return;
-	}
-	
+
 	_last_log_time = now;
-	_last_log_message = sprintf(fmt, ...args);
-	
-	// Format: [LEVEL] message
-	print(sprintf('[%s] %s\n', level, sprintf(fmt, ...args)));
+	_last_log_message = msg;
+
+	// procd logs stdout as daemon.info and stderr as daemon.err, so problems
+	// stand out in `logread` and can be filtered by priority.
+	let line = sprintf('[%s] %s\n', level, msg);
+	(level == 'WARN' || level == 'ERROR') ? warn(line) : print(line);
 }
 
 // Option debug: details of every sync in the system log, prefixed "DEBUG"
