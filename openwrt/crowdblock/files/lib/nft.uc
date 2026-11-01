@@ -12,6 +12,13 @@ const TABLE = 'inet crowdblock';
 const BATCH_FILE = '/tmp/crowdblock/batch.nft';
 const CHUNK = 256;
 
+// Shell timeout: busybox/coreutils `timeout` kills the command after `secs`
+// and exits 124. If `timeout` is missing, the command runs without a limit
+// (rc will be 127 "not found", still an error, still better than a hang).
+function with_timeout(cmd, secs) {
+	return 'timeout -s KILL ' + secs + ' ' + cmd + ' 2>&1';
+}
+
 function run_batch(script) {
 	let f = open(BATCH_FILE, 'w');
 	if (!f)
@@ -20,9 +27,7 @@ function run_batch(script) {
 	f.write(script);
 	f.close();
 
-	// nft may run for up to a minute on busy routers;
-	// we set wrapper to bail out quickly if it hangs.
-	let p = popen('nft -f ' + BATCH_FILE + ' 2>&1', 'r');
+	let p = popen(with_timeout('nft -f ' + BATCH_FILE, 30), 'r');
 	if (!p)
 		return 'cannot run nft';
 
@@ -31,11 +36,11 @@ function run_batch(script) {
 
 	unlink(BATCH_FILE);
 
+	if (rc == 124)
+		return 'nft timed out after 30s';
 	if (rc != 0) {
 		let code = rc;
 		let what = trim(out) || sprintf('nft exit code %d', code);
-		// distinguish timeout from other errors
-		if (code < 0) what += ' (timeout?)';  // negative rc means signal
 		return what;
 	}
 	return null;
@@ -44,10 +49,12 @@ function run_batch(script) {
 // For single commands run outside the daemon (no shared batch file).
 // `args` must be shell-safe, i.e. built from canonical IP addresses only.
 function run_cmd(args) {
-	let p = popen('nft ' + args + ' 2>&1', 'r');
+	let p = popen(with_timeout('nft ' + args, 10), 'r');
 	let out = p.read('all');
 	let rc = p.close();
 
+	if (rc == 124)
+		return 'nft timed out after 10s';
 	return (rc == 0) ? null : (trim(out) || `nft exit code ${rc}`);
 }
 
@@ -91,7 +98,7 @@ ${hook_chain('input', 'input')}`;
 }
 
 function exists() {
-	let p = popen('nft list tables | grep -qx \'table ' + TABLE + '\'', 'r');
+	let p = popen(with_timeout('nft list tables | grep -qx \'table ' + TABLE + '\'', 10), 'r');
 	let rc = p.close();
 	return rc == 0;
 }
@@ -143,7 +150,7 @@ function counters() {
 	let out = [];
 
 	for (let chain in [ 'input', 'forward' ]) {
-		let p = popen(`nft list chain ${TABLE} ${chain} 2>/dev/null`, 'r');
+		let p = popen(with_timeout(`nft list chain ${TABLE} ${chain} 2>/dev/null`, 10), 'r');
 		if (!p)
 			continue;
 
