@@ -221,7 +221,7 @@ function acquire_lock(timeout_sec) {
 			// Rename first: only one of several processes finding the lock
 			// stale succeeds, so none removes a lock that another has just
 			// taken over.
-			let old = LOCK_DIR + '.stale.' + getpid();
+			let old = LOCK_DIR + '.stale.' + time();
 			if (fs.rename(LOCK_DIR, old))
 				fs.rmdir(old);
 			continue;
