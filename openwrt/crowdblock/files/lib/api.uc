@@ -7,7 +7,8 @@ import { debug, ms_since } from 'crowdblock.logging';
 export const VERSION = '0.1.0';
 
 // Response bigger than this is rejected (protects RAM), also after unpacking.
-const MAX_BODY = 8 * 1024 * 1024;
+// Set from cfg.max_body (MiB) at the start of fetch_blocklist(); default 8 MiB.
+let max_body_bytes = 0;
 
 // Downloads go to a fresh directory here (RAM), so that the daemon and a
 // manual `crowdblock sync` never share a file.
@@ -41,7 +42,7 @@ const UCLIENT_HTTP_ERROR = 8;
 
 function read_file(path) {
 	let st = stat(path);
-	if (!st || st.size > MAX_BODY)
+	if (!st || st.size > max_body_bytes)
 		return null;
 
 	let f = open(path, 'r');
@@ -130,24 +131,24 @@ function cat_command(file) {
 }
 
 // Checks a downloaded body without unpacking it to a file: valid gzip and at
-// most MAX_BODY bytes unpacked (a gzip bomb can't fill the RAM). Returns
+// most max_body_bytes bytes unpacked (a gzip bomb can't fill the RAM). Returns
 // { size, unpacked } or { error }.
 function check_body(file, rcfile) {
 	let size = stat(file)?.size;
 	if (size == null)
 		return { error: 'no response body' };
 
-	if (size > MAX_BODY)
+	if (size > max_body_bytes)
 		return { error: 'response too large' };
 
 	// The exit code of gunzip, not of head / wc, tells whether it was valid.
 	let p = popen(sprintf('(%s 2>/dev/null; echo $? > %s) | head -c %d | wc -c',
-		cat_command(file), shell_quote(rcfile), MAX_BODY + 1), 'r');
+		cat_command(file), shell_quote(rcfile), max_body_bytes + 1), 'r');
 	let unpacked = p ? +trim(p.read('all') ?? '') : null;
 	if (p)
 		p.close();
 
-	if (unpacked == null || unpacked > MAX_BODY)
+	if (unpacked == null || unpacked > max_body_bytes)
 		return { error: 'response too large' };
 
 	if (trim(read_file(rcfile) ?? '') != '0')
@@ -185,7 +186,7 @@ function list_lines(file, cb) {
 	if (!stat(file))
 		return 'no list downloaded';
 
-	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 'r');
+	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), max_body_bytes + 1), 'r');
 	if (!p)
 		return 'cannot read ' + file;
 
@@ -261,7 +262,7 @@ function set_hash(ips, file) {
 // and replaces LIST_FILE with it, packed. Returns { etag, upserted, removed }
 // or { error } (the caller then fetches the full list).
 function apply_delta(cfg, file, dir) {
-	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 'r');
+	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), max_body_bytes + 1), 'r');
 	let d;
 	try { d = json(p); } catch (e) { }
 	if (p)
@@ -431,6 +432,7 @@ function each_entry(cb) {
 //   ...
 //   ]}
 function fetch_blocklist(cfg, etag) {
+	max_body_bytes = cfg.max_body * 1024 * 1024;
 	let url = sprintf('%s/api/v1/ips?min_reporters=%d&minutes=%d',
 		cfg.server, cfg.min_reports, (cfg.report_window + 59) / 60);
 
