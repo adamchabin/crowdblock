@@ -23,7 +23,7 @@ type response struct {
 	Reports24h     int            `json:"reports_24h"`
 	Reports7d      int            `json:"reports_7d"`
 	UniqueIPs24h   int            `json:"unique_ips_24h"`
-	Blacklisted24h int            `json:"blacklisted_24h"` // IPs that reached the threshold
+
 	Hourly         []int          `json:"hourly"`          // reports per hour, last 24 h, oldest first
 	Sources        map[string]int `json:"sources"`         // reports 24 h by source
 	Countries      []countryCount `json:"countries"`       // top 10 by reported IPs, 24 h
@@ -102,10 +102,9 @@ func computeStats(ctx context.Context) (*response, error) {
 		       (SELECT count(*) FROM api_keys WHERE revoked_at IS NULL),
 		       count(*) FILTER (WHERE reported_at > now() - interval '24 hours'),
 		       count(*),
-		       count(DISTINCT ip) FILTER (WHERE reported_at > now() - interval '24 hours'),
-		       (SELECT count(*) FROM blacklist WHERE last_seen > now() - interval '24 hours')
+		       count(DISTINCT ip) FILTER (WHERE reported_at > now() - interval '24 hours')
 		FROM ip_reports WHERE reported_at > now() - interval '7 days'`,
-	).Scan(&s.Users, &s.ActiveKeys, &s.Reports24h, &s.Reports7d, &s.UniqueIPs24h, &s.Blacklisted24h); err != nil {
+	).Scan(&s.Users, &s.ActiveKeys, &s.Reports24h, &s.Reports7d, &s.UniqueIPs24h); err != nil {
 		return nil, err
 	}
 
