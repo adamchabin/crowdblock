@@ -10,7 +10,8 @@ import (
 )
 
 type Config struct {
-	Threathive Threathive `yaml:"threathive"`
+	Threathive    Threathive     `yaml:"threathive"`
+	ExternalLists []ExternalList `yaml:"external_lists"`
 }
 
 type Threathive struct {
@@ -31,6 +32,29 @@ type Threathive struct {
 	ReportWindow string `yaml:"report_window"`
 }
 
+// ExternalList describes one external blocklist to import periodically.
+type ExternalList struct {
+	// Enabled turns on periodic import of this list.
+	Enabled bool `yaml:"enabled"`
+
+	// URL of the plain-text blocklist (one IP per line).
+	URL string `yaml:"url"`
+
+	// Interval between imports (Go duration string, e.g. 3h).
+	Interval string `yaml:"interval"`
+
+	// Source name stored with every imported report.
+	Source string `yaml:"source"`
+
+	// Report window stored with every imported report (not used directly;
+    // kept for documentation / future use).
+	ReportWindow string `yaml:"report_window"`
+
+	// Format of the list file. Currently only "plain" (one IP per line,
+	// lines starting with # are comments) is supported.
+	Format string `yaml:"format"`
+}
+
 // Load reads the YAML config from `path` and returns it.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -43,7 +67,7 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Defaults
+	// Threathive defaults (legacy section, kept for backwards compatibility).
 	if c.Threathive.URL == "" {
 		c.Threathive.URL = "https://threathive.net/hiveblocklist.txt"
 	}
@@ -55,6 +79,26 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Threathive.ReportWindow == "" {
 		c.Threathive.ReportWindow = "6h"
+	}
+
+	// External lists defaults.
+	for i := range c.ExternalLists {
+		l := &c.ExternalLists[i]
+		if l.URL == "" {
+			l.URL = "https://threathive.net/hiveblocklist.txt"
+		}
+		if l.Interval == "" {
+			l.Interval = "3h"
+		}
+		if l.Source == "" {
+			l.Source = "external"
+		}
+		if l.ReportWindow == "" {
+			l.ReportWindow = "6h"
+		}
+		if l.Format == "" {
+			l.Format = "plain"
+		}
 	}
 
 	return &c, nil

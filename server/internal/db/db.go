@@ -131,11 +131,14 @@ func PingTimeout(timeout time.Duration) error {
 	return RDB.Ping(ctx).Err()
 }
 
-// EnsureThreathiveSystem finds or creates the system user and API key used
-// by the Threathive importer. It returns (apiKeyID, userID).
-func EnsureThreathiveSystem(ctx context.Context) (apiKeyID, userID string, err error) {
+// EnsureExternalSystem finds or creates the system user and API key used
+// by an external list importer identified by `source`. It returns (apiKeyID, userID).
+func EnsureExternalSystem(ctx context.Context, source string) (apiKeyID, userID string, err error) {
+	email := source + "@system.local"
+	keyName := source + "-import"
+
 	// Find or create the system user.
-	err = DB.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, "threathive@system.local").Scan(&userID)
+	err = DB.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&userID)
 	if err == pgx.ErrNoRows {
 		var hash []byte
 		hash, err = bcrypt.GenerateFromPassword([]byte(generateSystemPassword()), bcrypt.DefaultCost)
@@ -144,7 +147,7 @@ func EnsureThreathiveSystem(ctx context.Context) (apiKeyID, userID string, err e
 		}
 		err = DB.QueryRow(ctx,
 			`INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id`,
-			"threathive@system.local", string(hash),
+			email, string(hash),
 		).Scan(&userID)
 		if err != nil {
 			return "", "", err
@@ -156,7 +159,7 @@ func EnsureThreathiveSystem(ctx context.Context) (apiKeyID, userID string, err e
 	// Find or create the API key for the system user.
 	err = DB.QueryRow(ctx,
 		`SELECT id FROM api_keys WHERE user_id = $1 AND name = $2`,
-		userID, "threathive-import",
+		userID, keyName,
 	).Scan(&apiKeyID)
 	if err == pgx.ErrNoRows {
 		rawKey, keyHash, keyPrefix, err := GenerateAPIKey()
@@ -166,7 +169,7 @@ func EnsureThreathiveSystem(ctx context.Context) (apiKeyID, userID string, err e
 		_ = rawKey // not needed externally; used only by the importer internally
 		err = DB.QueryRow(ctx,
 			`INSERT INTO api_keys (user_id, key_prefix, key_hash, name) VALUES ($1, $2, $3, $4) RETURNING id`,
-			userID, keyPrefix, keyHash, "threathive-import",
+			userID, keyPrefix, keyHash, keyName,
 		).Scan(&apiKeyID)
 		if err != nil {
 			return "", "", err
