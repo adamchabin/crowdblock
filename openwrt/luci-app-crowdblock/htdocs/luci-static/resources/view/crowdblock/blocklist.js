@@ -165,9 +165,13 @@ return view.extend({
 		const v6 = active.filter(function(ip) { return ip.indexOf(':') >= 0; }).length;
 
 		this.status_rows.last_sync.textContent = format_time(state.last_sync);
+		this.status_rows.last_ok_sync.textContent = format_time(state.last_success_sync);
 		this.status_rows.last_error.textContent = state.last_error || '-';
 		this.status_rows.failures.textContent = String(state.failures || 0);
 		this.status_rows.list_size.textContent = (state.list_size != null) ? String(state.list_size) : '-';
+		this.status_rows.memory.textContent = (state.memory_kb != null) ? String(state.memory_kb) + ' kB' : '-';
+		this.status_rows.uptime.textContent = state.daemon_start != null ? String(now - state.daemon_start) + ' s' : '-';
+		this.status_rows.version.textContent = state.version || '-';
 		this.status_rows.blocked.textContent = _('%d IPv4, %d IPv6, %d paused').format(
 			active.length - v6, v6, ips.length - active.length);
 
@@ -234,9 +238,13 @@ return view.extend({
 
 		this.status_rows = {
 			last_sync: E('td', { 'class': 'td left' }),
+			last_ok_sync: E('td', { 'class': 'td left' }),
 			last_error: E('td', { 'class': 'td left' }),
 			failures: E('td', { 'class': 'td left' }),
 			list_size: E('td', { 'class': 'td left' }),
+			memory: E('td', { 'class': 'td left' }),
+			uptime: E('td', { 'class': 'td left' }),
+			version: E('td', { 'class': 'td left' }),
 			blocked: E('td', { 'class': 'td left' }),
 		};
 
@@ -258,9 +266,13 @@ return view.extend({
 
 			E('table', { 'class': 'table' }, [
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left', 'width': '33%' }, _('Last sync')), this.status_rows.last_sync ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last successful sync')), this.status_rows.last_ok_sync ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last error')), this.status_rows.last_error ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Failed syncs in a row')), this.status_rows.failures ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Addresses on the server list')), this.status_rows.list_size ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Memory')), this.status_rows.memory ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Uptime')), this.status_rows.uptime ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Version')), this.status_rows.version ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Blocked')), this.status_rows.blocked ]),
 			]),
 
