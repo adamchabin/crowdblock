@@ -114,10 +114,13 @@ jobs:
         ./scripts/ipkg-make-package.sh bin/packages || true
         find bin/packages -name "Packages.gz" -exec realpath {} \;
 
+    - name: Set short SHA
+      run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v5
       with:
-        name: openwrt-packages-${{ github.sha }}
+        name: openwrt-packages-${{ env.SHORT_SHA }}
         path: |
           ${{ env.SDK_DIR }}/bin/packages/**/*.apk
           ${{ env.SDK_DIR }}/bin/packages/**/Packages.gz
@@ -136,10 +139,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v5
 
+    - name: Set short SHA
+      run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
     - name: Download artifacts
       uses: actions/download-artifact@v5
       with:
-        name: openwrt-packages
+        name: openwrt-packages-${{ env.SHORT_SHA }}
         path: packages
 
     - name: Create GitHub Release
