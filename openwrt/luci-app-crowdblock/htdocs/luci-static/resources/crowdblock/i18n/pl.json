@@ -45,6 +45,8 @@
 	"Last successful sync": "Ostatnia udana synchronizacja",
 	"Last sync": "Ostatnia synchronizacja",
 	"Maximum entries": "Maksymalna liczba wpisów",
+	"Max addresses per sync": "Maksymalna liczba adresów na sync",
+	"Maximum number of IP addresses the server returns per sync. 0 = unlimited.": "Maksymalna liczba adresów IP zwracanych przez serwer na sync. 0 = bez limitu.",
 	"Memory": "Pamięć",
 	"Minimum reports": "Minimalna liczba zgłoszeń",
 	"Must be at least twice the sync interval": "Musi wynosić co najmniej dwukrotność interwału synchronizacji",
