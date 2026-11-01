@@ -222,12 +222,37 @@ return view.extend({
 	},
 
 	handleSync: function() {
-		return fs.exec('/usr/sbin/crowdblock', [ 'sync' ]).then(function(res) {
+		var self = this;
+		var start_time = Date.now();
+		var prev_sync = this.status_rows.last_sync.textContent;
+		var prev_error = this.status_rows.last_error.textContent;
+
+		// Run sync in background so the XHR doesn't time out on large lists.
+		fs.exec('/bin/sh', ['-c', '/usr/sbin/crowdblock sync >/tmp/crowdblock-sync.log 2>&1 &']).then(function(res) {
 			if (res.code != 0)
-				ui.addNotification(null, E('p', _('Sync failed: %s').format(res.stderr || res.stdout || res.code)), 'error');
+				ui.addNotification(null, E('p', _('Failed to start sync: %s').format(res.stderr || res.stdout || res.code)), 'error');
+			else
+				ui.addNotification(null, E('p', _('Sync started in background.')), 'info');
+
+			var timer = setInterval(function() {
+				self.refresh().then(function() {
+					var cur_sync = self.status_rows.last_sync.textContent;
+					var cur_error = self.status_rows.last_error.textContent;
+					if (cur_sync !== prev_sync || cur_error !== prev_error) {
+						clearInterval(timer);
+						if (cur_error !== '-')
+							ui.addNotification(null, E('p', _('Sync failed: %s').format(cur_error)), 'error');
+						else
+							ui.addNotification(null, E('p', _('Sync completed.')), 'info');
+					} else if (Date.now() - start_time > 120000) {
+						clearInterval(timer);
+						ui.addNotification(null, E('p', _('Sync is still running. Check logread for details.')), 'warn');
+					}
+				});
+			}, 3000);
 		}).catch(function(e) {
 			ui.addNotification(null, E('p', e.message), 'error');
-		}).then(L.bind(this.refresh, this));
+		});
 	},
 
 	render: function(data) {
