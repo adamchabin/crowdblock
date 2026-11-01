@@ -24,6 +24,16 @@ import * as nft from 'crowdblock.nft';
 const STATE_DIR = '/tmp/crowdblock';
 const STATE_FILE = STATE_DIR + '/state.json';
 
+// Router's own addresses and DNS servers change rarely; re-resolving them on
+// every sync (every 10 min by default) just hammers ubusd for no reason.
+// Cache them for an hour, invalidated by a timer in cmd_run().
+const LOCAL_ADDR_REFRESH_INTERVAL = 3600; // 1 hour
+
+let local_addr_cache = null;
+let local_addr_cache_time = 0;
+let server_addr_cache = null;
+let server_addr_cache_time = 0;
+
 function log(fmt, ...args) {
 	print(sprintf(fmt, ...args), '\n');
 }
@@ -276,7 +286,13 @@ function resolve(cfg, host) {
 }
 
 // The router's own addresses, delegated prefixes and upstream DNS servers.
+// Results are cached for LOCAL_ADDR_REFRESH_INTERVAL to avoid hammering
+// ubusd on every sync; addresses rarely change.
 function local_addresses(cfg) {
+	let now = time();
+	if (local_addr_cache && now - local_addr_cache_time < LOCAL_ADDR_REFRESH_INTERVAL)
+		return local_addr_cache;
+
 	let res = [];
 
 	let p = fs.popen('ubus -t 5 call network.interface dump 2>/dev/null', 'r');
@@ -303,12 +319,20 @@ function local_addresses(cfg) {
 			push(res, a);
 	}
 
+	local_addr_cache = res;
+	local_addr_cache_time = now;
 	return res;
 }
 
 // The crowdblock server and common NTP servers must never end up blocked, or
 // the router could no longer sync / keep its clock right.
+// Results are cached like local_addresses() - DNS lookups are expensive and
+// rarely change.
 function server_addresses(cfg) {
+	let now = time();
+	if (server_addr_cache && now - server_addr_cache_time < LOCAL_ADDR_REFRESH_INTERVAL)
+		return server_addr_cache;
+
 	let hosts = [ ...ntp_servers ];
 	let m = match(trim(cfg?.server ?? ''), /^https?:\/\/(\[([0-9a-fA-F:]+)\]|[^\/?#:]+)/);
 	if (m)
@@ -319,6 +343,8 @@ function server_addresses(cfg) {
 		for (let ip in resolve(cfg, host))
 			push(res, ip);
 
+	server_addr_cache = res;
+	server_addr_cache_time = now;
 	return res;
 }
 
@@ -895,6 +921,13 @@ function cmd_run(cfg) {
 	ubus_timer = uloop.timer(UBUS_CHECK_INTERVAL * 1000, function() {
 		check_ubus();
 		ubus_timer.set(UBUS_CHECK_INTERVAL * 1000);
+	});
+
+	// Invalidate the local/server address cache every hour so a changed
+	// address (e.g. DHCP renewal) is picked up without hammering ubusd.
+	let whitelist_cache_timer = uloop.timer(LOCAL_ADDR_REFRESH_INTERVAL * 1000, function() {
+		local_addr_cache = null;
+		server_addr_cache = null;
 	});
 
 	uloop.run();
