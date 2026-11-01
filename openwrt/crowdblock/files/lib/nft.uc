@@ -20,13 +20,25 @@ function run_batch(script) {
 	f.write(script);
 	f.close();
 
+	// nft may run for up to a minute on busy routers;
+	// we set wrapper to bail out quickly if it hangs.
 	let p = popen('nft -f ' + BATCH_FILE + ' 2>&1', 'r');
+	if (!p)
+		return 'cannot run nft';
+
 	let out = p.read('all');
 	let rc = p.close();
 
 	unlink(BATCH_FILE);
 
-	return (rc == 0) ? null : (trim(out) || `nft exit code ${rc}`);
+	if (rc != 0) {
+		let code = rc;
+		let what = trim(out) || sprintf('nft exit code %d', code);
+		// distinguish timeout from other errors
+		if (code < 0) what += ' (timeout?)';  // negative rc means signal
+		return what;
+	}
+	return null;
 }
 
 // For single commands run outside the daemon (no shared batch file).

@@ -111,8 +111,10 @@ function download(cfg, url, file, errfile, etag, post) {
 		if (stderr_trimmed && stderr_trimmed != '') {
 			error_msg += sprintf(': %s', stderr_trimmed);
 		}
+		// exit code 8: HTTP error (not timeout). A real timeout would be negative (signal).
 	} else {
 		error_msg = sprintf('HTTP request failed (uclient-fetch exit code %d)', rc);
+		// exit code 8 = HTTP error; negative rc = signal (timeout). See run_batch.
 		// Include stderr content for more context if available
 		let stderr_trimmed = trim(stderr_content);
 		if (stderr_trimmed && stderr_trimmed != '') {
