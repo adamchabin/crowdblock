@@ -47,6 +47,8 @@
 	"Maximum entries": "Maximum entries",
 	"Max addresses per sync": "Max addresses per sync",
 	"Maximum number of IP addresses the server returns per sync. 0 = unlimited.": "Maximum number of IP addresses the server returns per sync. 0 = unlimited.",
+	"Max response body": "Max response body",
+	"MiB": "MiB",
 	"Memory": "Memory",
 	"Minimum reports": "Minimum reports",
 	"Must be at least twice the sync interval": "Must be at least twice the sync interval",

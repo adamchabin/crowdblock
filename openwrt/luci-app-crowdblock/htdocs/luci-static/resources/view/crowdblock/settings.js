@@ -136,6 +136,10 @@ return view.extend({
 		o.datatype = 'range(1,300)';
 		o.placeholder = '30';
 
+		o = s.taboption('advanced', form.Value, 'max_body', _('Max response body'), _('MiB'));
+		o.datatype = 'range(1,1024)';
+		o.placeholder = '8';
+
 		o = s.taboption('advanced', form.Flag, 'debug', _('Debug'),
 			_('Writes the details of every sync – what was downloaded (full list, delta, not modified) and how it was merged – to the system log: logread -e crowdblock'));
 
