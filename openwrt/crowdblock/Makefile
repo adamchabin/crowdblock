@@ -15,7 +15,8 @@ define Package/crowdblock
   SUBMENU:=Firewall
   TITLE:=Crowd-sourced IP blocklist client
   DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-math +ucode-mod-uci \
-           +ucode-mod-ubus +ucode-mod-uloop +uclient-fetch +nftables
+           +ucode-mod-ubus +ucode-mod-uloop +uclient-fetch +nftables \
+           +coreutils-timeout
   PKGARCH:=all
 endef
 
