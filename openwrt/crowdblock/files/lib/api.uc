@@ -17,6 +17,13 @@ function shell_quote(s) {
 	return "'" + replace('' + s, "'", "'\\''") + "'";
 }
 
+// Shell timeout: busybox/coreutils `timeout` kills the command after `secs`
+// and exits 124. If `timeout` is missing, the command runs without a limit
+// (rc will be 127 "not found", still an error, still better than a hang).
+function with_timeout(cmd, secs) {
+	return 'timeout -s KILL ' + secs + ' ' + cmd + ' 2>&1';
+}
+
 // uclient-fetch gained --header in 2025; older ones (OpenWrt 23.05/24.10)
 // reject the option, so ask for gzip only when it's there.
 let header_support = null;
@@ -92,7 +99,10 @@ function download(cfg, url, file, errfile, etag, post) {
 
 	push(argv, url);
 
-	let rc = system(join(' ', map(argv, shell_quote)) + ' 2>' + shell_quote(errfile));
+	// uclient-fetch has its own --timeout, but wrap with `timeout` too so a
+	// hung download cannot block the daemon forever.
+	let fetch_cmd = 'timeout -s KILL ' + cfg.timeout + ' ' + join(' ', map(argv, shell_quote));
+	let rc = system(fetch_cmd + ' 2>' + shell_quote(errfile));
 	if (rc == 0)
 		return {};
 
@@ -102,22 +112,21 @@ function download(cfg, url, file, errfile, etag, post) {
 	if (rc == UCLIENT_HTTP_ERROR && status?.[1] == '304')
 		return { not_modified: true };
 
+	if (rc == 124)
+		return { error: 'download timed out after ' + cfg.timeout + 's' };
+
 	// Provide more detailed error information
 	let error_msg;
 	if (status) {
 		error_msg = sprintf('server returned HTTP %s', status[1]);
-		// Include stderr content for more context if available
 		let stderr_trimmed = trim(stderr_content);
-		if (stderr_trimmed && stderr_trimmed != '') {
+		if (stderr_trimmed && stderr_trimmed != '')
 			error_msg += sprintf(': %s', stderr_trimmed);
-		}
 	} else {
 		error_msg = sprintf('HTTP request failed (uclient-fetch exit code %d)', rc);
-		// Include stderr content for more context if available
 		let stderr_trimmed = trim(stderr_content);
-		if (stderr_trimmed && stderr_trimmed != '') {
+		if (stderr_trimmed && stderr_trimmed != '')
 			error_msg += sprintf(': %s', stderr_trimmed);
-		}
 	}
 
 	return { error: error_msg };
@@ -145,8 +154,8 @@ function check_body(file, rcfile) {
 		return { error: 'response too large' };
 
 	// The exit code of gunzip, not of head / wc, tells whether it was valid.
-	let p = popen(sprintf('(%s 2>/dev/null; echo $? > %s) | head -c %d | wc -c',
-		cat_command(file), shell_quote(rcfile), MAX_BODY + 1), 'r');
+	let p = popen(with_timeout(sprintf('(%s 2>/dev/null; echo $? > %s) | head -c %d | wc -c',
+		cat_command(file), shell_quote(rcfile), MAX_BODY + 1), 30), 'r');
 	let unpacked = p ? +trim(p.read('all') ?? '') : null;
 	if (p)
 		p.close();
@@ -163,7 +172,7 @@ function check_body(file, rcfile) {
 // Same as the server's ETag: the first 16 hex digits of the SHA-256 of the
 // unpacked list, quoted (see the API contract in README.md).
 function etag_of(path) {
-	let p = popen(cat_command(path) + ' 2>/dev/null | sha256sum', 'r');
+	let p = popen(with_timeout(cat_command(path) + ' 2>/dev/null | sha256sum', 30), 'r');
 	let out = p ? p.read('all') : null;
 	if (p)
 		p.close();
@@ -174,7 +183,7 @@ function etag_of(path) {
 
 // First character of the (unpacked) body: '[' full list, '{' delta.
 function body_kind(file) {
-	let p = popen(cat_command(file) + ' 2>/dev/null | head -c 1', 'r');
+	let p = popen(with_timeout(cat_command(file) + ' 2>/dev/null | head -c 1', 10), 'r');
 	let c = p ? p.read('all') : null;
 	if (p)
 		p.close();
@@ -189,7 +198,7 @@ function list_lines(file, cb) {
 	if (!stat(file))
 		return 'no list downloaded';
 
-	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 'r');
+	let p = popen(with_timeout(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 30), 'r');
 	if (!p)
 		return 'cannot read ' + file;
 
@@ -249,7 +258,7 @@ function set_hash(ips, file) {
 		f.write(ip + '\n');
 	f.close();
 
-	let p = popen('sha256sum ' + shell_quote(file), 'r');
+	let p = popen(with_timeout('sha256sum ' + shell_quote(file), 30), 'r');
 	let out = p ? p.read('all') : null;
 	if (p)
 		p.close();
@@ -265,7 +274,7 @@ function set_hash(ips, file) {
 // and replaces LIST_FILE with it, packed. Returns { etag, upserted, removed }
 // or { error } (the caller then fetches the full list).
 function apply_delta(cfg, file, dir) {
-	let p = popen(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 'r');
+	let p = popen(with_timeout(sprintf('%s 2>/dev/null | head -c %d', cat_command(file), MAX_BODY + 1), 30), 'r');
 	let d;
 	try { d = json(p); } catch (e) { }
 	if (p)
@@ -318,7 +327,7 @@ function apply_delta(cfg, file, dir) {
 			length(ips), hash || 'null', d.count, d.set_hash) };
 	}
 
-	if (!err && system(sprintf('gzip -c %s > %s', shell_quote(plain), shell_quote(plain + '.gz'))) != 0)
+	if (!err && system('timeout -s KILL 30 gzip -c ' + shell_quote(plain) + ' > ' + shell_quote(plain + '.gz')) != 0)
 		return { error: sprintf('cannot pack %s', plain) };
 
 	if (!err && !rename(plain + '.gz', LIST_FILE))

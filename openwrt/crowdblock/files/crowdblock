@@ -279,7 +279,7 @@ function resolve(cfg, host) {
 function local_addresses(cfg) {
 	let res = [];
 
-	let p = fs.popen('ubus call network.interface dump 2>/dev/null', 'r');
+	let p = fs.popen('ubus -t 5 call network.interface dump 2>/dev/null', 'r');
 	if (!p)
 		return res;
 
@@ -789,6 +789,37 @@ function scan_log(cfg, reported) {
 
 // --- commands -------------------------------------------------------------
 
+// Open file descriptors of a running process (null if it isn't running).
+// A count that only grows means a leak, e.g. of ubus connections in ubusd.
+function fd_count(name) {
+	let p = fs.popen('pidof ' + name + ' 2>/dev/null', 'r');
+	let pid = p ? trim(p.read('all') ?? '') : '';
+	if (p)
+		p.close();
+
+	let fds = match(pid, /^[0-9]+$/) ? fs.lsdir('/proc/' + pid + '/fd') : null;
+	return fds ? length(fds) : null;
+}
+
+// ubus watchdog: a dead ubusd leaves the router unmanageable. Restarting
+// crowdblock wouldn't help, so only raise the alarm - once per outage, with
+// the ubusd descriptor count to tell a leak from a crash.
+const UBUS_CHECK_INTERVAL = 300;
+let ubus_down = false;
+
+function check_ubus() {
+	// The timeout also covers a ubusd that accepts connections but never answers.
+	let ok = system('ubus -t 5 list >/dev/null 2>&1', 10000) == 0;
+
+	if (!ok && !ubus_down)
+		error_log('ubus does not respond (ubusd fds: %s); blocking continues, local addresses are not refreshed',
+			fd_count('ubusd') ?? '-');
+	else if (ok && ubus_down)
+		info('ubus responds again');
+
+	ubus_down = !ok;
+}
+
 function jitter(sec, pct) {
 	return int(sec * 1000 * (1 + (rand() % (pct + 1)) / 100.0));
 }
@@ -856,6 +887,12 @@ function cmd_run(cfg) {
 			scan_timer.set(REPORT_INTERVAL * 1000);
 		});
 	}
+
+	let ubus_timer;
+	ubus_timer = uloop.timer(UBUS_CHECK_INTERVAL * 1000, function() {
+		check_ubus();
+		ubus_timer.set(UBUS_CHECK_INTERVAL * 1000);
+	});
 
 	uloop.run();
 }
@@ -930,18 +967,6 @@ function cmd_pause(arg, pause) {
 		if (err)
 			fatal(err);
 	}
-}
-
-// Open file descriptors of a running process (null if it isn't running).
-// A count that only grows means a leak, e.g. of ubus connections in ubusd.
-function fd_count(name) {
-	let p = fs.popen('pidof ' + name + ' 2>/dev/null', 'r');
-	let pid = p ? trim(p.read('all') ?? '') : '';
-	if (p)
-		p.close();
-
-	let fds = match(pid, /^[0-9]+$/) ? fs.lsdir('/proc/' + pid + '/fd') : null;
-	return fds ? length(fds) : null;
 }
 
 function cmd_status() {
