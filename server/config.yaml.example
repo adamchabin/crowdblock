@@ -1,18 +1,44 @@
 # crowdblock server configuration
 # See config.Load() for defaults.
+# Path to this file is taken from CONFIG_PATH environment variable,
+# defaulting to config.yaml next to the working directory.
 
+# --- Legacy threathive section (kept for backwards compatibility) ---
+# The preferred way to configure external lists is the external_lists array below.
 threathive:
-  # Set to true to periodically import https://threathive.net/hiveblocklist.txt
   enabled: false
-
-  # URL of the plain-text blocklist (one IP per line).
   url: "https://threathive.net/hiveblocklist.txt"
-
-  # How often to re-import (Go duration string).
   interval: "3h"
-
-  # Source name stored with every imported report.
   source: "threathive.net"
-
-  # Report window (documentation only; import is immediate).
   report_window: "6h"
+
+# --- External blocklists (generical mechanism, multiple lists supported) ---
+# Each list is downloaded independently on its own interval and its IPs are
+# inserted into ip_reports with the given source name.
+external_lists:
+  # Example 1: Threathive (same URL as the legacy section above)
+  - enabled: false
+    url: "https://threathive.net/hiveblocklist.txt"
+    interval: "3h"
+    source: "threathive.net"
+    report_window: "6h"
+    format: "plain"
+
+  # Example 2: romainmarcoux/malicious-ip - full-aa.txt
+  # 131,072 most malicious IP addresses, sorted by number of sources.
+  # Updated hourly. Recommended if you want a comprehensive list.
+  - enabled: false
+    url: "https://raw.githubusercontent.com/romainmarcoux/malicious-ip/main/full-aa.txt"
+    interval: "3h"
+    source: "romainmarcoux/malicious-ip"
+    report_window: "6h"
+    format: "plain"
+
+  # Example 3: romainmarcoux/malicious-ip - full-40k.txt
+  # 40,000 most malicious IP addresses (smaller, faster to download).
+  - enabled: false
+    url: "https://raw.githubusercontent.com/romainmarcoux/malicious-ip/main/full-40k.txt"
+    interval: "3h"
+    source: "romainmarcoux/malicious-ip-40k"
+    report_window: "6h"
+    format: "plain"

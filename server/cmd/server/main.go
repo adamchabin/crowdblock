@@ -21,7 +21,7 @@ import (
 	"server/internal/geoip"
 	"server/internal/list"
 	"server/internal/logging"
-	"server/internal/threathive"
+	"server/internal/externallist"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -146,22 +146,16 @@ func main() {
 		return db.RunReportPruner(ctx, retain, time.Hour)
 	})
 
-	// Threathive importer: periodically downloads the blocklist from
-	// threathive.net and inserts its IPs into ip_reports as external reports.
-	if cfg.Threathive.Enabled {
-		interval, err := time.ParseDuration(cfg.Threathive.Interval)
-		if err != nil {
-			slog.Error("invalid threathive interval", "value", cfg.Threathive.Interval, "err", err)
-			os.Exit(1)
+	// External list importers: periodically download each enabled external
+	// blocklist and insert its IPs into ip_reports as external reports.
+	// Each list runs on its own ticker with its own interval.
+	for i := range cfg.ExternalLists {
+		l := cfg.ExternalLists[i] // copy for the closure
+		if !l.Enabled {
+			continue
 		}
 		g.Go(func() error {
-			return threathive.Run(ctx, threathive.Config{
-				Enabled:      cfg.Threathive.Enabled,
-				URL:          cfg.Threathive.URL,
-				Interval:     interval,
-				Source:       cfg.Threathive.Source,
-				ReportWindow: 6 * time.Hour,
-			})
+			return externallist.Run(ctx, []config.ExternalList{l})
 		})
 	}
 
