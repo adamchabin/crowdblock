@@ -236,7 +236,7 @@ func GenerateLists(ctx context.Context, instance string, interval time.Duration)
 	n := 0
 	for _, minutes := range AllowedMinutes {
 		queryStart := time.Now()
-		all, err := db.QueryIPList(ctx, minutes, 1)
+		all, err := db.QueryIPList(ctx, minutes, 1, 0)
 		if err != nil {
 			return 0, fmt.Errorf("query (minutes=%d): %w", minutes, err)
 		}

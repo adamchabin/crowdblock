@@ -183,19 +183,28 @@ func AuthenticateAPIKey(ctx context.Context, rawKey string) (apiKeyID, userID st
 	return
 }
 
+// AllowedLimit values are the accepted limit parameter values for GET /ips.
+// 0 means unlimited (return everything).
+var AllowedLimit = []int{0, 5000, 10000, 50000, 100000, 250000, 500000}
+
 // QueryIPList returns the addresses reported by at least minReporters
 // distinct users within the last `minutes` minutes, the most reported first.
-func QueryIPList(ctx context.Context, minutes, minReporters int) ([]IPListEntry, error) {
-	rows, err := DB.Query(ctx, `
+// limit caps the number of returned addresses; 0 means unlimited.
+func QueryIPList(ctx context.Context, minutes, minReporters, limit int) ([]IPListEntry, error) {
+	query := `
 		SELECT abbrev(ip), COUNT(DISTINCT user_id) AS reporters,
 			COALESCE(array_agg(DISTINCT source ORDER BY source) FILTER (WHERE source IS NOT NULL), '{}')
 		FROM ip_reports
 		WHERE reported_at > now() - $1::int * interval '1 minute'
 		GROUP BY ip
 		HAVING COUNT(DISTINCT user_id) >= $2
-		ORDER BY reporters DESC, ip`,
-		minutes, minReporters,
-	)
+		ORDER BY reporters DESC, ip`
+	args := []any{minutes, minReporters}
+	if limit > 0 {
+		query += " LIMIT $3"
+		args = append(args, limit)
+	}
+	rows, err := DB.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

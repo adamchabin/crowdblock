@@ -563,7 +563,7 @@ func HandleListIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	minReporters, minutes, err := parseListParams(r.URL.Query())
+	minReporters, minutes, limit, err := parseListParams(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -583,7 +583,7 @@ func HandleListIPs(w http.ResponseWriter, r *http.Request) {
 	defer addLogNote(r, "from", "db")
 
 	logging.Debugf("list %d/%d: not in Redis, computing from PostgreSQL", minReporters, minutes)
-	result, err := db.QueryIPList(r.Context(), minutes, minReporters)
+	result, err := db.QueryIPList(r.Context(), minutes, minReporters, limit)
 	if err != nil {
 		if db.IsDBError(err) {
 			db.ServiceUnavailable(w, "postgres", err)
@@ -678,15 +678,24 @@ func HandleWorld(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(worldJSON)
 }
 
-// parseListParams validates min_reporters and minutes of GET /api/v1/ips.
-func parseListParams(q url.Values) (minReporters, minutes int, err error) {
+// parseListParams validates min_reporters, minutes and limit of GET /api/v1/ips.
+// limit caps the number of returned addresses; 0 means unlimited.
+func parseListParams(q url.Values) (minReporters, minutes, limit int, err error) {
 	minReporters, err = strconv.Atoi(q.Get("min_reporters"))
 	if err != nil || !slices.Contains(list.AllowedMinReporters, minReporters) {
-		return 0, 0, fmt.Errorf("invalid data (min_reporters must be one of %v)", list.AllowedMinReporters)
+		return 0, 0, 0, fmt.Errorf("invalid data (min_reporters must be one of %v)", list.AllowedMinReporters)
 	}
 	minutes, err = strconv.Atoi(q.Get("minutes"))
 	if err != nil || !slices.Contains(list.AllowedMinutes, minutes) {
-		return 0, 0, fmt.Errorf("invalid data (minutes must be one of %v)", list.AllowedMinutes)
+		return 0, 0, 0, fmt.Errorf("invalid data (minutes must be one of %v)", list.AllowedMinutes)
 	}
-	return minReporters, minutes, nil
+	limitStr := q.Get("limit")
+	limit = 0
+	if limitStr != "" {
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil || !slices.Contains(db.AllowedLimit, limit) {
+			return 0, 0, 0, fmt.Errorf("invalid data (limit must be one of %v)", db.AllowedLimit)
+		}
+	}
+	return minReporters, minutes, limit, nil
 }

@@ -177,7 +177,7 @@ func computeStats(ctx context.Context, forcedCountries map[string]string) (*resp
 		return nil, rows.Err()
 	}
 
-	ips, err := db.QueryIPList(ctx, 1440, 1)
+	ips, err := db.QueryIPList(ctx, 1440, 1, 0)
 	if err != nil {
 		return nil, err
 	}
