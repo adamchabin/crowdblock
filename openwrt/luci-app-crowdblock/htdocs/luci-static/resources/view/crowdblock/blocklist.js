@@ -170,7 +170,7 @@ return view.extend({
 		this.status_rows.failures.textContent = String(state.failures || 0);
 		this.status_rows.list_size.textContent = (state.list_size != null) ? String(state.list_size) : '-';
 		this.status_rows.memory.textContent = (state.memory_kb != null) ? String(state.memory_kb) + ' kB' : '-';
-		this.status_rows.uptime.textContent = state.daemon_start != null ? String(now - state.daemon_start) + ' s' : '-';
+		this.status_rows.uptime.textContent = state.daemon_start != null ? String(Math.floor(now - state.daemon_start)) + ' s' : '-';
 		this.status_rows.version.textContent = state.version || '-';
 		this.status_rows.blocked.textContent = _('%d IPv4, %d IPv6, %d paused').format(
 			active.length - v6, v6, ips.length - active.length);

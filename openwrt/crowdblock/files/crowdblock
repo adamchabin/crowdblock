@@ -1055,7 +1055,7 @@ function cmd_status() {
 	info('list size:  %s', st.list_size != null ? '' + st.list_size : '-');
 	info('ubusd fds:  %s', fd_count('ubusd') ?? '-');
 	info('memory:     %s kB', memory_kb() ?? '-');
-	info('uptime:     %s', daemon_uptime(st) != null ? sprintf('%ds', daemon_uptime(st)) : 'never');
+	info('uptime:     %s', daemon_uptime(st) != null ? sprintf('%ds', int(daemon_uptime(st))) : 'never');
 	info('version:    %s', VERSION);
 
 	for (let line in nft.counters())
