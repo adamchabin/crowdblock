@@ -88,15 +88,15 @@ function load() {
 	if (!(cfg.report_window in REPORT_WINDOWS))
 		return { error: 'option report_window must be one of 1h, 6h, 24h, 7d' };
 
-	// Each static_block entry must be a valid IP address or CIDR.
+	// Each static_block entry must be a plain IP address: CIDR is not yet
+	// supported, so reject it loudly instead of silently ignoring it.
 	for (let entry in cfg.static_block) {
 		let v = trim('' + entry);
 		if (v == '')
 			continue;
+		if (index(v, '/') >= 0)
+			return { error: `option static_block contains CIDR: ${v} (CIDR not yet supported)` };
 		let addr = v;
-		let slash = index(v, '/');
-		if (slash >= 0)
-			addr = slice(v, 0, slash);
 		if (!iptoarr(addr))
 			return { error: `option static_block contains invalid address: ${v}` };
 	}

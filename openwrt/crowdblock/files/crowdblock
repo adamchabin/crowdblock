@@ -436,8 +436,11 @@ function merge(cfg, st, wl, now, dry_run) {
 		let v = trim('' + entry);
 		if (v == '')
 			continue;
-		if (index(v, '/') >= 0)
-			continue; // CIDR not yet supported in static blocklist
+		// Rejected at config load time, but warn here as a safety net.
+		if (index(v, '/') >= 0) {
+			warn_log('ignoring CIDR in static_block: %s', v);
+			continue;
+		}
 		let bytes = iptoarr(v);
 		if (!bytes)
 			continue;
