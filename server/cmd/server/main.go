@@ -15,11 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"server/config"
 	"server/internal/api"
 	"server/internal/db"
 	"server/internal/geoip"
 	"server/internal/list"
 	"server/internal/logging"
+	"server/internal/threathive"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -39,6 +41,16 @@ func setupLogging() {
 func main() {
 	setupLogging()
 	slog.Info("starting server", "version", version)
+
+	cfgPath := os.Getenv("CONFIG_PATH")
+	if cfgPath == "" {
+		cfgPath = "config.yaml"
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		slog.Error("cannot load config", "path", cfgPath, "err", err)
+		os.Exit(1)
+	}
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -133,6 +145,25 @@ func main() {
 		retain := maxWindow + time.Hour // safety margin over the largest window
 		return db.RunReportPruner(ctx, retain, time.Hour)
 	})
+
+	// Threathive importer: periodically downloads the blocklist from
+	// threathive.net and inserts its IPs into ip_reports as external reports.
+	if cfg.Threathive.Enabled {
+		interval, err := time.ParseDuration(cfg.Threathive.Interval)
+		if err != nil {
+			slog.Error("invalid threathive interval", "value", cfg.Threathive.Interval, "err", err)
+			os.Exit(1)
+		}
+		g.Go(func() error {
+			return threathive.Run(ctx, threathive.Config{
+				Enabled:      cfg.Threathive.Enabled,
+				URL:          cfg.Threathive.URL,
+				Interval:     interval,
+				Source:       cfg.Threathive.Source,
+				ReportWindow: 6 * time.Hour,
+			})
+		})
+	}
 
 	// HTTP server: shut down when the signal context ends, otherwise
 	// g.Wait() below would block forever on SIGINT/SIGTERM.
