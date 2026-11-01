@@ -101,14 +101,15 @@ func main() {
 	mux.HandleFunc("GET /{$}", api.HandleUI)
 	mux.HandleFunc("GET /api/v1/stats", api.HandleStats)
 	mux.HandleFunc("GET /api/v1/health", api.HandleHealth)
-	// TODO(adam): rate-limit register, api-keys, reports and ips like geoip below (bcrypt CPU DoS, password brute force, cheap full-list download); see security.md #1, #10.
-	mux.HandleFunc("POST /api/v1/register", api.HandleRegister)
-	mux.HandleFunc("POST /api/v1/api-keys", api.HandleCreateAPIKey)
+	// Rate-limit endpoints that are expensive or abuse-prone, per remote IP.
+	// Redis-backed counters are shared across instances.
+	mux.Handle("POST /api/v1/register", api.RateLimit("register", 5, time.Hour, http.HandlerFunc(api.HandleRegister)))
+	mux.Handle("POST /api/v1/api-keys", api.RateLimit("api-keys", 10, time.Hour, http.HandlerFunc(api.HandleCreateAPIKey)))
 	mux.HandleFunc("GET /api/v1/api-keys", api.HandleListAPIKeys)
 	mux.HandleFunc("DELETE /api/v1/api-keys/{id}", api.HandleRevokeAPIKey)
 	mux.HandleFunc("DELETE /api/v1/account", api.HandleDeleteAccount)
-	mux.HandleFunc("POST /api/v1/reports", api.HandleReportIP)
-	mux.HandleFunc("GET /api/v1/ips", api.HandleListIPs)
+	mux.Handle("POST /api/v1/reports", api.RateLimit("reports", 100, time.Hour, http.HandlerFunc(api.HandleReportIP)))
+	mux.Handle("GET /api/v1/ips", api.RateLimit("ips", 1000, time.Hour, http.HandlerFunc(api.HandleListIPs)))
 	// geoip is unauthenticated, so it's the one endpoint group with no built-in
 	// cost (no API key, no per-user limit): rate-limit it per remote address.
 	mux.Handle("GET /api/v1/geoip/{ip}", api.RateLimit("geoip", 120, time.Minute, http.HandlerFunc(api.HandleGeoIP)))

@@ -136,7 +136,10 @@ func HandleRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if db.IsUniqueViolation(err) {
-			http.Error(w, "email already taken", http.StatusConflict)
+			// Don't reveal whether the email already exists (enumeration
+			// protection). Pretend registration succeeded; a real user can
+			// try logging in (which fails if they don't know the password).
+			writeJSON(w, http.StatusCreated, map[string]string{})
 			return
 		}
 		slog.Error("register: insert user failed", "err", err)
