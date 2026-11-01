@@ -1,0 +1,18 @@
+# crowdblock server configuration
+# See config.Load() for defaults.
+
+threathive:
+  # Set to true to periodically import https://threathive.net/hiveblocklist.txt
+  enabled: false
+
+  # URL of the plain-text blocklist (one IP per line).
+  url: "https://threathive.net/hiveblocklist.txt"
+
+  # How often to re-import (Go duration string).
+  interval: "3h"
+
+  # Source name stored with every imported report.
+  source: "threathive.net"
+
+  # Report window (documentation only; import is immediate).
+  report_window: "6h"

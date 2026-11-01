@@ -3,9 +3,12 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
 	_ "embed"
 	"fmt"
+	"golang.org/x/crypto/bcrypt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -126,4 +129,82 @@ func PingTimeout(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return RDB.Ping(ctx).Err()
+}
+
+// EnsureThreathiveSystem finds or creates the system user and API key used
+// by the Threathive importer. It returns (apiKeyID, userID).
+func EnsureThreathiveSystem(ctx context.Context) (apiKeyID, userID string, err error) {
+	// Find or create the system user.
+	err = DB.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, "threathive@system.local").Scan(&userID)
+	if err == pgx.ErrNoRows {
+		var hash []byte
+		hash, err = bcrypt.GenerateFromPassword([]byte(generateSystemPassword()), bcrypt.DefaultCost)
+		if err != nil {
+			return "", "", err
+		}
+		err = DB.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id`,
+			"threathive@system.local", string(hash),
+		).Scan(&userID)
+		if err != nil {
+			return "", "", err
+		}
+	} else if err != nil {
+		return "", "", err
+	}
+
+	// Find or create the API key for the system user.
+	err = DB.QueryRow(ctx,
+		`SELECT id FROM api_keys WHERE user_id = $1 AND name = $2`,
+		userID, "threathive-import",
+	).Scan(&apiKeyID)
+	if err == pgx.ErrNoRows {
+		rawKey, keyHash, keyPrefix, err := GenerateAPIKey()
+		if err != nil {
+			return "", "", err
+		}
+		_ = rawKey // not needed externally; used only by the importer internally
+		err = DB.QueryRow(ctx,
+			`INSERT INTO api_keys (user_id, key_prefix, key_hash, name) VALUES ($1, $2, $3, $4) RETURNING id`,
+			userID, keyPrefix, keyHash, "threathive-import",
+		).Scan(&apiKeyID)
+		if err != nil {
+			return "", "", err
+		}
+	} else if err != nil {
+		return "", "", err
+	}
+
+	return apiKeyID, userID, nil
+}
+
+// generateSystemPassword returns a random password used only for the system
+// user (it is never meant to be used for login).
+func generateSystemPassword() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	buf := make([]byte, 32)
+	for i := range buf {
+		var n int
+		if _, err := rand.Read(buf[i : i+1]); err != nil {
+			n = int(buf[i]) % len(alphabet) // fallback: deterministic-ish
+		} else {
+			n = int(buf[0]) % len(alphabet)
+		}
+		buf[i] = alphabet[n]
+	}
+	return string(buf)
+}
+
+// RecordExternalReport inserts a report from an external source (e.g.
+// Threathive) into ip_reports. It validates the IP is public and not CIDR.
+func RecordExternalReport(ctx context.Context, ip, source, apiKeyID, userID string) error {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !IsPublicIP(addr) {
+		return fmt.Errorf("not a public IP: %s", ip)
+	}
+	_, err = DB.Exec(ctx,
+		`INSERT INTO ip_reports (ip, api_key_id, user_id, source) VALUES ($1, $2, $3, NULLIF($4, ''))`,
+		addr.Unmap().String(), apiKeyID, userID, source,
+	)
+	return err
 }
