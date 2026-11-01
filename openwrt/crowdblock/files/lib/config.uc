@@ -44,6 +44,9 @@ function bool_opt(v, def) {
 const MIN_REPORTS = [ 1, 5, 10, 20, 50 ];
 const REPORT_WINDOWS = [ 3600, 21600, 86400, 604800 ];  // 1h, 6h, 24h, 7d
 
+// The server accepts these limit values (0 = unlimited).
+const LIMIT_VALUES = [ 0, 5000, 10000, 50000, 100000, 250000, 500000 ];
+
 // Returns { cfg: {...} } or { error: '...' }.
 function load() {
 	let s = cursor().get_all('crowdblock', 'main');
@@ -61,6 +64,7 @@ function load() {
 		block_time:    dur_opt(s.block_time, 86400, 60, 30 * 86400),
 		sync_interval: dur_opt(s.sync_interval, 600, 60, 86400),
 		max_entries:   int_opt(s.max_entries, 20000, 1, 500000),
+		limit:         int_opt(s.limit, 0, 0, 500000),
 		timeout:       int_opt(s.timeout, 30, 1, 300),
 		block_forward: bool_opt(s.block_forward, true),
 		verify_tls:    bool_opt(s.verify_tls, true),
@@ -87,6 +91,9 @@ function load() {
 
 	if (!(cfg.report_window in REPORT_WINDOWS))
 		return { error: 'option report_window must be one of 1h, 6h, 24h, 7d' };
+
+	if (!(cfg.limit in LIMIT_VALUES))
+		return { error: `option limit must be one of ${join(', ', LIMIT_VALUES)}` };
 
 	// Each static_block entry must be a plain IP address: CIDR is not yet
 	// supported, so reject it loudly instead of silently ignoring it.

@@ -85,6 +85,14 @@ return view.extend({
 			o.value(String(n));
 		o.default = '5';
 
+		// Maximum number of addresses returned per sync. Same allowed
+		// values as in config.uc (0 = unlimited).
+		o = s.taboption('general', form.ListValue, 'limit', _('Max addresses per sync'),
+			_('Maximum number of IP addresses the server returns per sync. 0 = unlimited.'));
+		for (const n of [ 0, 5000, 10000, 50000, 100000, 250000, 500000 ])
+			o.value(String(n));
+		o.default = '0';
+
 		o = s.taboption('advanced', form.ListValue, 'report_window', _('Report window'),
 			_('Only reports from this recent period are counted.'));
 		o.value('1h', _('1 hour'));

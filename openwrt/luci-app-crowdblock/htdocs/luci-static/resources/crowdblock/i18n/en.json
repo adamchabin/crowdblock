@@ -45,6 +45,8 @@
 	"Last successful sync": "Last successful sync",
 	"Last sync": "Last sync",
 	"Maximum entries": "Maximum entries",
+	"Max addresses per sync": "Max addresses per sync",
+	"Maximum number of IP addresses the server returns per sync. 0 = unlimited.": "Maximum number of IP addresses the server returns per sync. 0 = unlimited.",
 	"Memory": "Memory",
 	"Minimum reports": "Minimum reports",
 	"Must be at least twice the sync interval": "Must be at least twice the sync interval",

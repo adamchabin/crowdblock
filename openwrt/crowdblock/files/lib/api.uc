@@ -434,6 +434,9 @@ function fetch_blocklist(cfg, etag) {
 	let url = sprintf('%s/api/v1/ips?min_reporters=%d&minutes=%d',
 		cfg.server, cfg.min_reports, (cfg.report_window + 59) / 60);
 
+	if (cfg.limit > 0)
+		url += sprintf('&limit=%d', cfg.limit);
+
 	// Unpacked copy kept by 0.1.0-r13; the list is stored packed now.
 	unlink(TMP_DIR + '/list.json');
 
