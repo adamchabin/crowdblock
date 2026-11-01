@@ -63,6 +63,30 @@ type countryCount struct {
 	IPs         int    `json:"ips"`
 }
 
+// countryNames maps a few common ISO 3166-1 alpha-2 codes to English names.
+// Used when a forced country overrides GeoIP and no GeoIP name is available.
+var countryNames = map[string]string{
+	"PT": "Portugal",
+	"US": "United States",
+	"CN": "China",
+	"RU": "Russia",
+	"BR": "Brazil",
+	"DE": "Germany",
+	"FR": "France",
+	"GB": "United Kingdom",
+	"IT": "Italy",
+	"ES": "Spain",
+	"NL": "Netherlands",
+	"TR": "Turkey",
+	"UA": "Ukraine",
+	"IN": "India",
+	"JP": "Japan",
+	"KR": "South Korea",
+	"CA": "Canada",
+	"AU": "Australia",
+	"PL": "Poland",
+}
+
 const statsTTL = time.Minute
 
 var (
@@ -74,13 +98,15 @@ var (
 
 // CachedStats recomputes at most once per statsTTL; the lock also stops
 // concurrent requests from running the queries in parallel.
-func CachedStats(ctx context.Context) (*response, error) {
+// forcedCountries maps external-list source names to an ISO country code that
+// overrides GeoIP lookups for IPs reported by that source.
+func CachedStats(ctx context.Context, forcedCountries map[string]string) (*response, error) {
 	statsMu.Lock()
 	defer statsMu.Unlock()
 	if statsCache != nil && time.Now().Before(statsExpiry) {
 		return statsCache, nil
 	}
-	s, err := computeStats(ctx)
+	s, err := computeStats(ctx, forcedCountries)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +114,7 @@ func CachedStats(ctx context.Context) (*response, error) {
 	return s, nil
 }
 
-func computeStats(ctx context.Context) (*response, error) {
+func computeStats(ctx context.Context, forcedCountries map[string]string) (*response, error) {
 	s := &response{
 		Cache:       computeCacheStats(ctx),
 		GeneratedAt: time.Now().UTC(),
@@ -158,10 +184,18 @@ func computeStats(ctx context.Context) (*response, error) {
 	byCountry := map[string]int{}
 	names := map[string]string{}
 	for _, e := range ips {
-		if e.Country != "" {
-			byCountry[e.Country]++
-			if _, ok := names[e.Country]; !ok {
-				names[e.Country] = e.CountryName
+		country := e.Country
+		// A forced country from the external-list config overrides GeoIP.
+		for _, src := range e.Sources {
+			if forced, ok := forcedCountries[src]; ok {
+				country = forced
+				break
+			}
+		}
+		if country != "" {
+			byCountry[country]++
+			if _, ok := names[country]; !ok {
+				names[country] = countryNames[country]
 			}
 		}
 	}
@@ -215,8 +249,10 @@ func computeCacheStats(ctx context.Context) cacheStats {
 }
 
 // HandleStats handles GET /api/v1/stats.
-func HandleStats(w http.ResponseWriter, r *http.Request) {
-	s, err := CachedStats(r.Context())
+// forcedCountries maps external-list source names to an ISO country code that
+// overrides GeoIP lookups for IPs reported by that source.
+func HandleStats(w http.ResponseWriter, r *http.Request, forcedCountries map[string]string) {
+	s, err := CachedStats(r.Context(), forcedCountries)
 	if err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
