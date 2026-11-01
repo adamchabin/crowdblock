@@ -571,13 +571,17 @@ func HandleListIPs(w http.ResponseWriter, r *http.Request) {
 
 	// Precomputed by the list generator (list package); computed here only
 	// until the first generation or when Redis is unavailable.
-	if meta, ok := list.ServeCachedList(w, r, minReporters, minutes); ok {
-		addLogNote(r, "list", meta.Kind)
-		addLogNote(r, "enc", meta.Encoding)
-		setLogRecords(r, meta.Records)
-		addLogNote(r, "from", "cache")
-		addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
-		return
+	// A client limit bypasses the cache: a truncated list can't reuse the
+	// full-list ETag from Redis.
+	if limit == 0 {
+		if meta, ok := list.ServeCachedList(w, r, minReporters, minutes); ok {
+			addLogNote(r, "list", meta.Kind)
+			addLogNote(r, "enc", meta.Encoding)
+			setLogRecords(r, meta.Records)
+			addLogNote(r, "from", "cache")
+			addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
+			return
+		}
 	}
 	defer addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
 	defer addLogNote(r, "from", "db")
