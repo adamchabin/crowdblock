@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"server/config"
 	"server/internal/db"
 	"server/internal/geoip"
 	"server/internal/list"
@@ -28,6 +29,15 @@ import (
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// apiConfig holds the server configuration, set from main() before serving.
+var apiConfig *config.Config
+
+// SetConfig stores the server configuration for use by handlers (e.g.
+// forced countries for external lists in stats).
+func SetConfig(c *config.Config) {
+	apiConfig = c
+}
 
 const (
 	// MaxBodyBytes is the maximum request body size.
@@ -643,7 +653,13 @@ func HandleGeoIPBatch(w http.ResponseWriter, r *http.Request) {
 
 // HandleStats handles GET /api/v1/stats.
 func HandleStats(w http.ResponseWriter, r *http.Request) {
-	stats.HandleStats(w, r)
+	forcedCountries := map[string]string{}
+	for _, l := range apiConfig.ExternalLists {
+		if l.Country != "" {
+			forcedCountries[l.Source] = l.Country
+		}
+	}
+	stats.HandleStats(w, r, forcedCountries)
 }
 
 // HandleUI handles GET /.

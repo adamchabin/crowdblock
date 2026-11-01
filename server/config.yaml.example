@@ -34,11 +34,23 @@ external_lists:
     report_window: "6h"
     format: "plain"
 
-  # Example 3: romainmarcoux/malicious-ip - full-40k.txt
-  # 40,000 most malicious IP addresses (smaller, faster to download).
+  # Example 2: romainmarcoux/malicious-ip - full-aa.txt
+  # 131,072 most malicious IP addresses, sorted by number of sources.
+  # Updated hourly. Recommended if you want a comprehensive list.
   - enabled: false
-    url: "https://raw.githubusercontent.com/romainmarcoux/malicious-ip/main/full-40k.txt"
+    url: "https://raw.githubusercontent.com/romainmarcoux/malicious-ip/main/full-aa.txt"
     interval: "3h"
-    source: "romainmarcoux/malicious-ip-40k"
+    source: "romainmarcoux/malicious-ip"
     report_window: "6h"
     format: "plain"
+
+  # Example 3: romainmarcoux/malicious-ip - full-pt-aa.txt (Portugal only)
+  # If GeoIP doesn't resolve these IPs as Portugal, force the country so
+  # they show up on the map.
+  - enabled: false
+    url: "https://raw.githubusercontent.com/romainmarcoux/malicious-ip/refs/heads/main/malicious-ip-by-country/full-pt-aa.txt"
+    interval: "3h"
+    source: "romainmarcoux/malicious-ip-pt"
+    report_window: "6h"
+    format: "plain"
+    country: "PT"

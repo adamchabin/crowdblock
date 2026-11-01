@@ -51,6 +51,7 @@ func main() {
 		slog.Error("cannot load config", "path", cfgPath, "err", err)
 		os.Exit(1)
 	}
+	api.SetConfig(cfg)
 
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {

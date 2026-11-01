@@ -53,6 +53,12 @@ type ExternalList struct {
 	// Format of the list file. Currently only "plain" (one IP per line,
 	// lines starting with # are comments) is supported.
 	Format string `yaml:"format"`
+
+	// Country, when set, forces this ISO 3166-1 alpha-2 code for every IP
+	// imported from this list in statistics and on the map, overriding the
+	// GeoIP lookup. Useful when the external list is country-specific but
+	// the GeoIP database doesn't resolve those addresses correctly.
+	Country string `yaml:"country"`
 }
 
 // Load reads the YAML config from `path` and returns it.
