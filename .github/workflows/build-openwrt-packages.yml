@@ -117,7 +117,7 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v5
       with:
-        name: openwrt-packages
+        name: openwrt-packages-${{ github.sha }}
         path: |
           ${{ env.SDK_DIR }}/bin/packages/**/*.apk
           ${{ env.SDK_DIR }}/bin/packages/**/Packages.gz
