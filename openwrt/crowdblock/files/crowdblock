@@ -425,14 +425,10 @@ function merge(cfg, st, wl, now, dry_run) {
 			return;
 		}
 
-		if (whitelisted(wl, bytes)) {
-			stats.whitelisted++;
-			push(seen.whitelisted, e.ip);
-			return;
-		}
-
 		let ip = arrtoip(bytes);  // canonical form
 
+		// Already blocked: refresh it. purge_whitelisted() already removed any
+		// state entry that became whitelisted, so no whitelist check needed here.
 		if (exists(st.entries, ip)) {
 			st.entries[ip] = expires;
 			st.reports[ip] = e.reports;
@@ -441,8 +437,16 @@ function merge(cfg, st, wl, now, dry_run) {
 			if (e.sources)
 				st.sources[ip] = e.sources;
 			stats.refreshed++;
+			return;
 		}
-		else if (count < cfg.max_entries) {
+
+		if (whitelisted(wl, bytes)) {
+			stats.whitelisted++;
+			push(seen.whitelisted, e.ip);
+			return;
+		}
+
+		if (count < cfg.max_entries) {
 			st.entries[ip] = expires;
 			st.reports[ip] = e.reports;
 			if (e.country)
@@ -532,18 +536,27 @@ function merge(cfg, st, wl, now, dry_run) {
 function purge_whitelisted(st, wl) {
 	let n = 0;
 
+	// Exact-match lookup for single-address nets (/32 /128): most whitelist
+	// entries are single IPs, so this makes the common check O(1) instead of a
+	// linear scan over every net for each state entry.
+	let exact = {};
+	for (let net in wl)
+		if (net.len == length(net.bytes) * 8)
+			exact[arrtoip(net.bytes)] = true;
+
 	for (let ip in keys(st.entries)) {
-		let bytes = iptoarr(ip);
-		let is_whitelisted = false;
-		
-		if (bytes) {
-			// Single IP
-			is_whitelisted = whitelisted(wl, bytes);
-		} else {
-			// CIDR - we check if the network address is whitelisted
-			let cidr = parse_cidr(ip);
-			if (cidr) {
-				is_whitelisted = whitelisted(wl, cidr.bytes);
+		let is_whitelisted = exact[ip];
+
+		if (!is_whitelisted) {
+			let bytes = iptoarr(ip);
+			if (bytes) {
+				// Single IP
+				is_whitelisted = whitelisted(wl, bytes);
+			} else {
+				// CIDR - we check if the network address is whitelisted
+				let cidr = parse_cidr(ip);
+				if (cidr)
+					is_whitelisted = whitelisted(wl, cidr.bytes);
 			}
 		}
 
