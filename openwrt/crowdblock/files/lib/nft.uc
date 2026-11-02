@@ -73,24 +73,24 @@ function set_of(ip) {
 }
 
 function hook_chain(name, hook) {
-	return `	chain ${name} {
-		type filter hook ${hook} priority filter -10; policy accept;
-		ip saddr @wl4 accept
-		ip6 saddr @wl6 accept
-		ip saddr @v4 counter drop
-		ip6 saddr @v6 counter drop
-	}
-`;
+	return '	chain ' + name + ' {\n' +
+		'		type filter hook ' + hook + ' priority filter -10; policy accept;\n' +
+		'		ip saddr @wl4 accept\n' +
+		'		ip6 saddr @wl6 accept\n' +
+		'		ip saddr @v4 counter drop\n' +
+		'		ip6 saddr @v6 counter drop\n' +
+		'	}\n';
+}
 
 function add_elements(lines, set, elems) {
 	for (let i = 0; i < length(elems); i += CHUNK)
-		push(lines, `add element ${TABLE} ${set} { ${join(', ', slice(elems, i, i + CHUNK))} }`);
+		push(lines, 'add element ' + TABLE + ' ' + set + ' { ' + join(', ', slice(elems, i, i + CHUNK)) + ' }');
 }
 
 // Helper to add elements to a set (similar to add_elements but for custom sets)
 function add_set_elements(lines, set, elems) {
 	for (let i = 0; i < length(elems); i += CHUNK) {
-		push(lines, `add element ${TABLE} ${set} { ${join(', ', slice(elems, i, i + CHUNK))} }`);
+		push(lines, 'add element ' + TABLE + ' ' + set + ' { ' + join(', ', slice(elems, i, i + CHUNK)) + ' }');
 	}
 }
 
@@ -103,9 +103,9 @@ function add_whitelist_elements(lines, elems) {
 			(index(ip, ':') >= 0 ? v6 : v4).push(ip);
 		}
 		if (length(v4) > 0)
-			push(lines, `add element ${TABLE} wl4 { ${join(', ', v4)} }`);
+			push(lines, 'add element ' + TABLE + ' wl4 { ' + join(', ', v4) + ' }');
 		if (length(v6) > 0)
-			push(lines, `add element ${TABLE} wl6 { ${join(', ', v6)} }`);
+			push(lines, 'add element ' + TABLE + ' wl6 { ' + join(', ', v6) + ' }');
 	}
 }
 
@@ -113,21 +113,21 @@ function add_whitelist_elements(lines, elems) {
 // Returns null on success, error string on failure.
 function setup(cfg) {
 	let lines = [
-		`table ${TABLE} {`,
-		`	set v4 { type ipv4_addr; flags timeout; }`,
-		`	set v6 { type ipv6_addr; flags timeout; }`,
-		`	set wl4 { type ipv4_addr; }`,
-		`	set wl6 { type ipv6_addr; }`,
+		'table ' + TABLE + ' {',
+		'	set v4 { type ipv4_addr; flags timeout; }',
+		'	set v6 { type ipv6_addr; flags timeout; }',
+		'	set wl4 { type ipv4_addr; }',
+		'	set wl6 { type ipv6_addr; }',
 		hook_chain('input', 'input'),
 		hook_chain('forward', 'forward'),
-		`}`
+		'}'
 	];
 	return run_batch(join('\n', lines) + '\n');
 }
 
 // Checks if the nftables table exists.
 function exists() {
-	let p = popen(with_timeout(`nft list table ${TABLE} 2>/dev/null`, 10), 'r');
+	let p = popen(with_timeout('nft list table ' + TABLE + ' 2>/dev/null', 10), 'r');
 	if (!p)
 		return false;
 	let out = p.read('all');
@@ -137,7 +137,7 @@ function exists() {
 
 // Removes the entire nftables table (unblocks everything).
 function teardown() {
-	return run_cmd(`delete table ${TABLE}`);
+	return run_cmd('delete table ' + TABLE);
 }
 
 // Replaces the contents of both sets atomically (one nft transaction).
@@ -150,7 +150,7 @@ function apply(cfg, entries, now, paused) {
 	for (let ip, expires in entries) {
 		let ttl = expires - now;
 		if (ttl > 0 && !(ip in (paused ?? [])))
-			push(index(ip, ':') >= 0 ? v6 : v4, `${ip} timeout ${ttl}s`);
+			push(index(ip, ':') >= 0 ? v6 : v4, ip + ' timeout ' + ttl + 's');
 	}
 
 	if (length(v4) == 0 && length(v6) == 0)
@@ -171,11 +171,11 @@ function apply(cfg, entries, now, paused) {
 
 // Single-element changes for `crowdblock pause` / `resume`.
 function block(ip, ttl) {
-	return run_cmd(`add element ${TABLE} ${set_of(ip)} { ${ip} timeout ${ttl}s }`);
+	return run_cmd('add element ' + TABLE + ' ' + set_of(ip) + ' { ' + ip + ' timeout ' + ttl + 's }');
 }
 
 function unblock(ip) {
-	return run_cmd(`delete element ${TABLE} ${set_of(ip)} { ${ip} }`);
+	return run_cmd('delete element ' + TABLE + ' ' + set_of(ip) + ' { ' + ip + ' }');
 }
 
 // Rule lines with packet/byte counters, for `crowdblock status`.
@@ -184,13 +184,13 @@ function counters() {
 	let out = [];
 
 	for (let chain in [ 'input', 'forward' ]) {
-		let p = popen(with_timeout(`nft list chain ${TABLE} ${chain} 2>/dev/null`, 10), 'r');
+		let p = popen(with_timeout('nft list chain ' + TABLE + ' ' + chain + ' 2>/dev/null', 10), 'r');
 		if (!p)
 			continue;
 
 		for (let line = p.read('line'); length(line); line = p.read('line')) {
 			if (index(line, 'counter') >= 0)
-				push(out, `${chain}: ${trim(line)}`);
+				push(out, chain + ': ' + trim(line));
 		}
 
 		p.close();
