@@ -589,7 +589,7 @@ function sync(cfg, real, dry_run) {
 	let st = dry_run ? json(sprintf('%J', real)) : real;
 	let persist = (s) => dry_run ? null : save_state(s);
 	let now = time();
-	let start = clock(true);
+	let start = time();
 	let expired = drop_expired(st, now);
 	if (expired > 0)
 		state_dirty = true;
@@ -612,7 +612,7 @@ function sync(cfg, real, dry_run) {
 	};
 
 	try {
-		let fetch_start = clock(true);
+		let fetch_start = time();
 		let res = fetch_blocklist(cfg, st.list_etag);
 		debug(cfg, 'sync: fetch_blocklist took %d ms', ms_since(fetch_start));
 		let err = res.error;
@@ -628,21 +628,30 @@ function sync(cfg, real, dry_run) {
 			return false;
 		}
 
-		let wl_start = clock(true);
+		let wl_start = time();
 		let wl = build_whitelist(cfg);
 		debug(cfg, 'sync: build_whitelist took %d ms', ms_since(wl_start));
-		let purge_start = clock(true);
+		let purge_start = time();
 		let purged = purge_whitelisted(st, wl);
 		debug(cfg, 'sync: purge_whitelisted took %d ms', ms_since(purge_start));
 		if (purged) {
 			debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
 			state_dirty = true;
 		}
-		let merge_start = clock(true);
-		let stats = merge(cfg, st, wl, now, dry_run);
-		debug(cfg, 'sync: merge took %d ms', ms_since(merge_start));
-		if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0 || stats.removed > 0)
-			state_dirty = true;
+		// Skip merge entirely if list not modified (304) - state is already current.
+		let merge_start = time();
+		let stats;
+		if (!res.not_modified) {
+			stats = merge(cfg, st, wl, now, dry_run);
+			debug(cfg, 'sync: merge took %d ms', ms_since(merge_start));
+			if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0 || stats.removed > 0)
+				state_dirty = true;
+		} else {
+			debug(cfg, 'sync: merge skipped (304 not modified)');
+			// When 304, we still need stats for the log line, but they're all zero.
+			stats = { added: 0, refreshed: 0, whitelisted: 0, below: 0, invalid: 0, full: 0, removed: 0, new_ips: [] };
+			debug(cfg, 'sync: merge took %d ms', ms_since(merge_start));
+		}
 
 		if (stats.error) {
 			st.last_error = stats.error;
@@ -677,7 +686,7 @@ function sync(cfg, real, dry_run) {
 		debug(cfg, 'sync: nftables exists check done, err=%s', err ?? 'none');
 
 		// Skip nft.apply entirely if list not modified (304) - nftables already has correct state.
-		let nft_start = clock(true);
+		let nft_start = time();
 		if (!err && !res.not_modified) {
 			let paused = load_paused();
 			err = nft.apply(cfg, st.entries, now, paused);
@@ -697,7 +706,7 @@ function sync(cfg, real, dry_run) {
 		}
 		debug(cfg, 'sync: nft.apply took %d ms', ms_since(nft_start));
 
-		let persist_start = clock(true);
+		let persist_start = time();
 		st.list_etag = res.etag;
 		st.last_sync = now;
 		st.last_error = err;
