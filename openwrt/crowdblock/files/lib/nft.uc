@@ -7,6 +7,7 @@
 'use strict';
 
 import { open, popen, unlink } from 'fs';
+import { debug } from 'crowdblock.logging';
 
 const TABLE = 'inet crowdblock';
 const BATCH_FILE = '/tmp/crowdblock/batch.nft';
