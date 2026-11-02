@@ -1,0 +1,618 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crowdblock admin</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7f9;
+        --card: #fff;
+        --fg: #1a1d21;
+        --mute: #6b7280;
+        --bar: #3b82f6;
+        --danger: #dc2626;
+        --success: #16a34a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111418;
+          --card: #1b1f25;
+          --fg: #e6e8eb;
+          --mute: #8b93a0;
+          --bar: #60a5fa;
+          --danger: #f87171;
+          --success: #4ade80;
+        }
+      }
+      body {
+        margin: 0;
+        font: 15px system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        min-height: 100vh;
+      }
+      main { max-width: 1400px; margin: 0 auto; padding: 24px 16px; width: 100%; }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .mute { color: var(--mute); font-size: 13px; }
+      .tabs {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 20px;
+        border-bottom: 1px solid var(--mute);
+        padding-bottom: 8px;
+      }
+      .tab {
+        padding: 8px 16px;
+        border: none;
+        background: transparent;
+        color: var(--mute);
+        font: inherit;
+        cursor: pointer;
+        border-radius: 6px;
+        transition: all 0.2s;
+      }
+      .tab:hover { background: var(--card); color: var(--fg); }
+      .tab.active { background: var(--bar); color: white; }
+      .card {
+        background: var(--card);
+        border-radius: 10px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .card h2 {
+        font-size: 16px;
+        margin: 0 0 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .toolbar input, .toolbar select {
+        padding: 8px 12px;
+        border: 1px solid var(--mute);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+        font: inherit;
+      }
+      .toolbar input:focus, .toolbar select:focus {
+        outline: none;
+        border-color: var(--bar);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th, td {
+        padding: 10px 12px;
+        text-align: left;
+        border-bottom: 1px solid var(--mute);
+      }
+      th {
+        color: var(--mute);
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        user-select: none;
+      }
+      th:hover { color: var(--fg); }
+      tr:hover td { background: var(--bg); }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .badge-danger { background: #fef2f2; color: var(--danger); }
+      .badge-success { background: #f0fdf4; color: var(--success); }
+      .badge-warning { background: #fffbeb; color: #d97706; }
+      .badge-neutral { background: #f3f4f6; color: var(--mute); }
+      @media (prefers-color-scheme: dark) {
+        .badge-danger { background: #7f1d1d; color: #fca5a5; }
+        .badge-success { background: #14532d; color: #86efac; }
+        .badge-warning { background: #78350f; color: #fde047; }
+        .badge-neutral { background: #374151; color: var(--mute); }
+      }
+      .btn {
+        padding: 6px 12px;
+        border: none;
+        border-radius: 6px;
+        font: inherit;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .btn-danger {
+        background: var(--danger);
+        color: white;
+      }
+      .btn-danger:hover { opacity: 0.9; }
+      .btn-secondary {
+        background: var(--mute);
+        color: white;
+      }
+      .btn-secondary:hover { opacity: 0.9; }
+      .pagination {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .page-btn {
+        padding: 6px 12px;
+        border: 1px solid var(--mute);
+        background: var(--card);
+        color: var(--fg);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .page-btn.active { background: var(--bar); color: white; border-color: var(--bar); }
+      .page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      .empty { text-align: center; padding: 32px; color: var(--mute); }
+      .loading { text-align: center; padding: 32px; color: var(--mute); }
+      .ip-cell { font-family: monospace; font-size: 13px; }
+      .time-cell { font-variant-numeric: tabular-nums; font-size: 13px; }
+      .search-box { flex: 1; min-width: 200px; }
+      .page-size { width: auto; }
+      .dialog-overlay {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+        display: flex; align-items: center; justify-content: center; z-index: 100;
+      }
+      .dialog {
+        background: var(--card); padding: 24px; border-radius: 12px;
+        min-width: 320px; max-width: 400px;
+      }
+      .dialog h3 { margin: 0 0 12px; }
+      .dialog p { margin: 0 0 20px; color: var(--mute); }
+      .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+      .hidden { display: none !important; }
+      .ip-link { color: var(--bar); text-decoration: none; }
+      .ip-link:hover { text-decoration: underline; }
+      .source-badge { font-size: 11px; padding: 1px 6px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>crowdblock admin</h1>
+          <div class="mute">Server administration panel</div>
+        </div>
+        <a href="/" class="btn btn-secondary">Back to dashboard</a>
+      </header>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="users">Users</button>
+        <button class="tab" data-tab="api-keys">API Keys</button>
+        <button class="tab" data-tab="reports">Reports</button>
+      </div>
+
+      <!-- Users Tab -->
+      <section id="tab-users" class="tab-panel">
+        <div class="card">
+          <h2>Users <span id="users-count" class="mute"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="users-search" class="search-box" placeholder="Search by email...">
+            <select id="users-sort" class="page-size">
+              <option value="created_at">Sort by: Created</option>
+              <option value="email">Sort by: Email</option>
+              <option value="is_admin">Sort by: Admin</option>
+              <option value="key_count">Sort by: API Keys</option>
+              <option value="report_count">Sort by: Reports</option>
+            </select>
+            <select id="users-page-size" class="page-size">
+              <option value="20">20 per page</option>
+              <option value="50">50 per page</option>
+              <option value="100">100 per page</option>
+            </select>
+          </div>
+          <div id="users-table-container">
+            <table id="users-table">
+              <thead>
+                <tr>
+                  <th data-sort="email">Email</th>
+                  <th data-sort="is_admin">Admin</th>
+                  <th data-sort="created_at">Created</th>
+                  <th data-sort="key_count">API Keys</th>
+                  <th data-sort="report_count">Reports</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="users-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="users-pagination"></div>
+        </div>
+      </section>
+
+      <!-- API Keys Tab -->
+      <section id="tab-api-keys" class="tab-panel hidden">
+        <div class="card">
+          <h2>API Keys <span id="keys-count" class="mute"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="keys-search" class="search-box" placeholder="Search by prefix or user email...">
+            <select id="keys-sort" class="page-size">
+              <option value="created_at">Sort by: Created</option>
+              <option value="prefix">Sort by: Prefix</option>
+              <option value="name">Sort by: Name</option>
+              <option value="user_email">Sort by: User</option>
+              <option value="revoked_at">Sort by: Revoked</option>
+              <option value="report_count">Sort by: Reports</option>
+            </select>
+            <select id="keys-page-size" class="page-size">
+              <option value="20">20 per page</option>
+              <option value="50">50 per page</option>
+              <option value="100">100 per page</option>
+            </select>
+          </div>
+          <div id="keys-table-container">
+            <table id="keys-table">
+              <thead>
+                <tr>
+                  <th data-sort="prefix">Prefix</th>
+                  <th data-sort="name">Name</th>
+                  <th data-sort="user_email">User</th>
+                  <th data-sort="created_at">Created</th>
+                  <th data-sort="revoked_at">Revoked</th>
+                  <th data-sort="report_count">Reports</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="keys-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="keys-pagination"></div>
+        </div>
+      </section>
+
+      <!-- Reports Tab -->
+      <section id="tab-reports" class="tab-panel hidden">
+        <div class="card">
+          <h2>Reports <span id="reports-count" class="mute"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="reports-search" class="search-box" placeholder="Search by IP or user email...">
+            <select id="reports-sort" class="page-size">
+              <option value="reported_at">Sort by: Date</option>
+              <option value="ip">Sort by: IP</option>
+              <option value="user_email">Sort by: User</option>
+              <option value="source">Sort by: Source</option>
+              <option value="country">Sort by: Country</option>
+            </select>
+            <select id="reports-page-size" class="page-size">
+              <option value="20">20 per page</option>
+              <option value="50">50 per page</option>
+              <option value="100">100 per page</option>
+            </select>
+          </div>
+          <div id="reports-table-container">
+            <table id="reports-table">
+              <thead>
+                <tr>
+                  <th data-sort="ip">IP</th>
+                  <th data-sort="country">Country</th>
+                  <th data-sort="user_email">User</th>
+                  <th data-sort="source">Source</th>
+                  <th data-sort="reported_at">Reported</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="reports-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="reports-pagination"></div>
+        </div>
+      </section>
+
+      <!-- Confirmation Dialog -->
+      <div id="confirm-dialog" class="dialog-overlay hidden">
+        <div class="dialog">
+          <h3 id="confirm-title"></h3>
+          <p id="confirm-message"></p>
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+            <button class="btn btn-danger" id="confirm-ok"></button>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script>
+      // Utility functions
+      const $ = (id) => document.getElementById(id);
+      const el = (tag, attrs = {}, ...children) => {
+        const e = document.createElement(tag);
+        Object.assign(e, attrs);
+        children.forEach(c => {
+          if (typeof c === 'string') e.append(document.createTextNode(c));
+          else if (c instanceof Node) e.append(c);
+        });
+        return e;
+      };
+      const fmt = (n) => n.toLocaleString();
+      const fmtTime = (ts) => ts ? new Date(ts * 1000).toLocaleString() : 'never';
+      const fmtDate = (ts) => ts ? new Date(ts * 1000).toLocaleDateString() : 'never';
+
+      // State
+      let currentTab = 'users';
+      let usersState = { page: 1, pageSize: 20, search: '', sortBy: 'created_at', sortDesc: true };
+      let keysState = { page: 1, pageSize: 20, search: '', sortBy: 'created_at', sortDesc: true };
+      let reportsState = { page: 1, pageSize: 20, search: '', sortBy: 'reported_at', sortDesc: true };
+      let confirmAction = null;
+
+      // API helpers
+      async function api(path, options = {}) {
+        const res = await fetch(path, {
+          ...options,
+          headers: { 'Content-Type': 'application/json', ...options.headers },
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.json();
+      }
+
+      // Tab switching
+      document.querySelectorAll('.tab').forEach(btn => {
+        btn.onclick = () => {
+          document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+          btn.classList.add('active');
+          $('tab-' + btn.dataset.tab).classList.remove('hidden');
+          currentTab = btn.dataset.tab;
+        });
+      });
+
+      // Search/sort/page handlers
+      function setupListState(state, searchId, sortId, pageSizeId, loadFn) {
+        $(searchId).oninput = debounce(() => { state.search = $(searchId).value; state.page = 1; loadFn(); }, 300);
+        $(sortId).onchange = () => { state.sortBy = $(sortId).value; state.page = 1; loadFn(); };
+        $(pageSizeId).onchange = () => { state.pageSize = +$(pageSizeId).value; state.page = 1; loadFn(); };
+      }
+
+      function debounce(fn, ms) {
+        let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+      }
+
+      // Build query string
+      function buildQuery(state) {
+        const params = new URLSearchParams();
+        params.set('page', state.page);
+        params.set('page_size', state.pageSize);
+        if (state.search) params.set('search', state.search);
+        if (state.sortBy) params.set('sort_by', state.sortBy);
+        if (state.sortDesc) params.set('sort_desc', 'true');
+        return params.toString();
+      }
+
+      // Render functions
+      function renderUsers(data) {
+        const tbody = $('users-tbody');
+        tbody.innerHTML = '';
+        if (!data.items.length) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">No users found</td></tr>';
+          $('users-count').textContent = '';
+          return;
+        }
+        $('users-count').textContent = `(${data.total_count} total)`;
+        data.items.forEach(u => {
+          const tr = el('tr');
+          tr.innerHTML = `
+            <td>${u.email}</td>
+            <td><span class="badge ${u.is_admin ? 'badge-success' : 'badge-neutral'}">${u.is_admin ? 'Yes' : 'No'}</span></td>
+            <td class="time-cell">${fmtDate(u.created_at)}</td>
+            <td>${u.key_count}</td>
+            <td>${u.report_count}</td>
+            <td>
+              <div style="display:flex;gap:4px;">
+                <button class="btn btn-secondary" onclick="toggleAdmin('${u.id}', ${!u.is_admin})">
+                  ${u.is_admin ? 'Revoke Admin' : 'Make Admin'}
+                </button>
+                <button class="btn btn-danger" onclick="confirmDelete('user', '${u.id}', 'user ${u.email}')">Delete</button>
+              </div>
+            </td>
+          `;
+          tbody.append(tr);
+        });
+        renderPagination('users-pagination', usersState, loadUsers);
+      }
+
+      function renderKeys(data) {
+        const tbody = $('keys-tbody');
+        tbody.innerHTML = '';
+        if (!data.items.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">No API keys found</td></tr>';
+          $('keys-count').textContent = '';
+          return;
+        }
+        $('keys-count').textContent = `(${data.total_count} total)`;
+        data.items.forEach(k => {
+          const tr = el('tr');
+          const revoked = k.revoked_at ? 'Yes' : 'No';
+          const badge = k.revoked_at ? 'badge-danger' : 'badge-success';
+          tr.innerHTML = `
+            <td class="ip-cell">${k.prefix}</td>
+            <td>${k.name || '-'}</td>
+            <td>${k.user_email}</td>
+            <td class="time-cell">${fmtDate(k.created_at)}</td>
+            <td><span class="badge ${badge}">${revoked}</span></td>
+            <td>${k.report_count}</td>
+            <td>
+              <div style="display:flex;gap:4px;">
+                ${!k.revoked_at ? `<button class="btn btn-danger" onclick="confirmRevoke('${k.id}')">Revoke</button>` : ''}
+                <button class="btn btn-danger" onclick="confirmDelete('apikey', '${k.id}', 'API key ${k.prefix}')">Delete</button>
+              </div>
+            </td>
+          `;
+          tbody.append(tr);
+        });
+        renderPagination('keys-pagination', keysState, loadKeys);
+      }
+
+      function renderReports(data) {
+        const tbody = $('reports-tbody');
+        tbody.innerHTML = '';
+        if (!data.items.length) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">No reports found</td></tr>';
+          $('reports-count').textContent = '';
+          return;
+        }
+        $('reports-count').textContent = `(${data.total_count} total)`;
+        data.items.forEach(r => {
+          const tr = el('tr');
+          tr.innerHTML = `
+            <td class="ip-cell"><a href="https://bgp.he.net/ip/${r.ip}" target="_blank" class="ip-link">${r.ip}</a></td>
+            <td>${r.country_name || r.country || 'Unknown'}</td>
+            <td>${r.user_email}</td>
+            <td>${r.source || '-'}</td>
+            <td class="time-cell">${fmtTime(r.reported_at)}</td>
+            <td><button class="btn btn-danger" onclick="confirmDelete('report', '${r.id}', 'report for ${r.ip}')">Delete</button></td>
+          `;
+          tbody.append(tr);
+        });
+        renderPagination('reports-pagination', reportsState, loadReports);
+      }
+
+      function renderPagination(containerId, state, loadFn) {
+        const container = $(containerId);
+        container.innerHTML = '';
+        if (data.totalPages <= 1) return;
+        const maxPages = 5;
+        let start = Math.max(1, state.page - Math.floor(maxPages / 2));
+        let end = Math.min(data.totalPages, start + maxPages - 1);
+        if (end - start < maxPages - 1) start = Math.max(1, end - maxPages + 1);
+
+        if (start > 1) container.append(el('button', { class: 'page-btn', onclick: `goPage(${state}, 1)` }, '1'));
+        if (start > 2) container.append(el('span', { class: 'mute' }, '...'));
+
+        for (let i = start; i <= end; i++) {
+          container.append(el('button', {
+            class: 'page-btn' + (i === state.page ? ' active' : ''),
+            onclick: `goPage(${JSON.stringify(state)}, ${i})`
+          }, String(i)));
+        }
+
+        if (end < data.totalPages - 1) container.append(el('span', { class: 'mute' }, '...'));
+        if (end < data.totalPages) container.append(el('button', { class: 'page-btn', onclick: `goPage(${JSON.stringify(state)}, ${data.totalPages})` }, data.totalPages));
+      }
+
+      window.goPage = (state, page) => {
+        state.page = page;
+        if (state === usersState) loadUsers();
+        else if (state === keysState) loadKeys();
+        else if (state === reportsState) loadReports();
+      };
+
+      // Load functions
+      async function loadUsers() {
+        try {
+          const data = await api('/api/v1/admin/users?' + buildQuery(usersState));
+          data = data;
+          renderUsers(data);
+        } catch (e) {
+          showError('Failed to load users: ' + e.message);
+        }
+      }
+
+      async function loadKeys() {
+        try {
+          const data = await api('/api/v1/admin/api-keys?' + buildQuery(keysState));
+          renderKeys(data);
+        } catch (e) {
+          showError('Failed to load API keys: ' + e.message);
+        }
+      }
+
+      async function loadReports() {
+        try {
+          const data = await api('/api/v1/admin/reports?' + buildQuery(reportsState));
+          renderReports(data);
+        } catch (e) {
+          showError('Failed to load reports: ' + e.message);
+        }
+      }
+
+      // Confirmation dialog
+      function showConfirm(title, message, onConfirm) {
+        confirmAction = onConfirm;
+        $('confirm-title').textContent = title;
+        $('confirm-message').textContent = message;
+        $('confirm-dialog').classList.remove('hidden');
+      }
+
+      function hideConfirm() {
+        $('confirm-dialog').classList.add('hidden');
+        confirmAction = null;
+      }
+
+      window.confirmDelete = (type, id, name) => {
+        showConfirm(
+          'Delete ' + type,
+          'Are you sure you want to delete ' + name + '? This action cannot be undone.',
+          () => api('/api/v1/admin/' + type + 's/' + id, { method: 'DELETE' })
+            .then(() => { hideConfirm(); loadTab(currentTab); })
+            .catch(e => showError('Failed to delete: ' + e.message))
+        );
+      };
+
+      window.confirmRevoke = (id) => {
+        showConfirm(
+          'Revoke API Key',
+          'Are you sure you want to revoke this API key? It will no longer work for authentication.',
+          () => api('/api/v1/admin/api-keys/' + id + '/revoke', { method: 'PATCH' })
+            .then(() => { hideConfirm(); loadKeys(); })
+            .catch(e => showError('Failed to revoke: ' + e.message))
+        );
+      };
+
+      window.toggleAdmin = (id, makeAdmin) => {
+        api('/api/v1/admin/users/' + id + '/admin', {
+          method: 'PATCH',
+          body: JSON.stringify({ is_admin: makeAdmin })
+        }).then(() => loadUsers()).catch(e => showError('Failed: ' + e.message));
+      };
+
+      // Tab loading
+      function loadTab(tab) {
+        currentTab = tab;
+        if (tab === 'users') loadUsers();
+        else if (tab === 'api-keys') loadKeys();
+        else if (tab === 'reports') loadReports();
+      }
+
+      // Initial load
+      loadTab('users');
+
+      // Search/sort handlers
+      setupListState(usersState, 'users-search', 'users-sort', 'users-page-size', loadUsers);
+      setupListState(keysState, 'keys-search', 'keys-sort', 'keys-page-size', loadKeys);
+      setupListState(reportsState, 'reports-search', 'reports-sort', 'reports-page-size', loadReports);
+
+      // Dialog close handlers
+      $('confirm-cancel').onclick = hideConfirm;
+      $('confirm-ok').onclick = () => { confirmAction?.(); hideConfirm(); };
+      $('confirm-dialog').onclick = (e) => { if (e.target === $('confirm-dialog')) hideConfirm(); };
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideConfirm();
+      });
+    </script>
+  </body>
+</html>

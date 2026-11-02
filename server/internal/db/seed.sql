@@ -81,3 +81,6 @@ FROM api_keys k
 JOIN users u ON u.id = k.user_id
 CROSS JOIN generate_series(1, 10) AS g
 WHERE k.key_prefix = 'sfw_dev_' AND u.email = 'dev-reporter1';
+
+-- Make the first dev user an administrator so they can access /admin.
+UPDATE users SET is_admin = TRUE WHERE email = 'dev';

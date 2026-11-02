@@ -703,3 +703,224 @@ func parseListParams(q url.Values) (minReporters, minutes, limit int, err error)
 	}
 	return minReporters, minutes, limit, nil
 }
+
+// RequireAdmin is a middleware that checks if the user is an admin.
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check for API key in header or Basic auth
+		rawKey := apiKeyFromRequest(r)
+		if rawKey == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="api"`)
+			http.Error(w, "authorization required", http.StatusUnauthorized)
+			return
+		}
+
+		apiKeyID, userID, err := db.AuthenticateAPIKey(r.Context(), rawKey)
+		if err != nil {
+			if db.IsDBError(err) || db.IsRedisError(err) {
+				db.ServiceUnavailable(w, "auth", err)
+				return
+			}
+			http.Error(w, "invalid API key", http.StatusUnauthorized)
+			return
+		}
+
+		// Check if user is admin
+		var isAdmin bool
+		err = db.DB.QueryRow(r.Context(), `SELECT is_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin)
+		if err != nil || !isAdmin {
+			http.Error(w, "admin access required", http.StatusForbidden)
+			return
+		}
+
+		// Add user info to context for downstream handlers
+		ctx := context.WithValue(r.Context(), "admin_user_id", userID)
+		ctx = context.WithValue(ctx, "admin_api_key_id", apiKeyID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// AdminListUsers handles GET /api/v1/admin/users
+func AdminListUsers(w http.ResponseWriter, r *http.Request) {
+	opts := parseAdminListOptions(r.URL.Query())
+	result, err := db.ListUsers(r.Context(), opts)
+	if err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// AdminGetUser handles GET /api/v1/admin/users/{id}
+func AdminGetUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	user, err := db.GetUserByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "user not found", http.StatusNotFound)
+			return
+		}
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// AdminDeleteUser handles DELETE /api/v1/admin/users/{id}
+func AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := db.DeleteUser(r.Context(), id); err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminToggleAdmin handles PATCH /api/v1/admin/users/{id}/admin
+func AdminToggleAdmin(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		IsAdmin bool `json:"is_admin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid data", http.StatusBadRequest)
+		return
+	}
+	if err := db.ToggleAdmin(r.Context(), id, req.IsAdmin); err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminListAPIKeys handles GET /api/v1/admin/api-keys
+func AdminListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	opts := parseAdminListOptions(r.URL.Query())
+	result, err := db.ListAPIKeys(r.Context(), opts)
+	if err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// AdminDeleteAPIKey handles DELETE /api/v1/admin/api-keys/{id}
+func AdminDeleteAPIKey(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := db.DeleteAPIKey(r.Context(), id); err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminRevokeAPIKey handles PATCH /api/v1/admin/api-keys/{id}/revoke
+func AdminRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := db.RevokeAPIKey(r.Context(), id); err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AdminListReports handles GET /api/v1/admin/reports
+func AdminListReports(w http.ResponseWriter, r *http.Request) {
+	opts := parseAdminListOptions(r.URL.Query())
+	result, err := db.ListReports(r.Context(), opts)
+	if err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// AdminDeleteReport handles DELETE /api/v1/admin/reports/{id}
+func AdminDeleteReport(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if err := db.DeleteReport(r.Context(), id); err != nil {
+		if db.IsDBError(err) {
+			db.ServiceUnavailable(w, "postgres", err)
+			return
+		}
+		http.Error(w, "server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func parseAdminListOptions(q url.Values) db.AdminListOptions {
+	page := 1
+	if p := q.Get("page"); p != "" {
+		if pInt, err := strconv.Atoi(p); err == nil && pInt > 0 {
+			page = pInt
+		}
+	}
+	pageSize := 20
+	if ps := q.Get("page_size"); ps != "" {
+		if psInt, err := strconv.Atoi(ps); err == nil && psInt > 0 && psInt <= 100 {
+			pageSize = psInt
+		}
+	}
+	search := q.Get("search")
+	sortBy := q.Get("sort_by")
+	sortDesc := q.Get("sort_desc") == "true"
+
+	return db.AdminListOptions{
+		Page:     page,
+		PageSize: pageSize,
+		Search:   search,
+		SortBy:   sortBy,
+		SortDesc: sortDesc,
+	}
+}
+
+// adminUIHTML is the embedded admin UI page.
+//
+//go:embed admin.html
+var adminUIHTML []byte
+
+// HandleAdminUI handles GET /admin/
+func HandleAdminUI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(adminUIHTML)
+}

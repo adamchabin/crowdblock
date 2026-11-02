@@ -268,3 +268,369 @@ func IsPublicIP(a netip.Addr) bool {
 
 // ErrNoRows is returned when a query matches nothing.
 var ErrNoRows = pgx.ErrNoRows
+
+// AdminPanel related types and functions
+
+// AdminUser represents a user in the admin panel.
+type AdminUser struct {
+	ID        string    `json:"id"`
+	Email     string    `json:"email"`
+	IsAdmin   bool      `json:"is_admin"`
+	CreatedAt time.Time `json:"created_at"`
+	KeyCount  int       `json:"key_count"`
+	ReportCount int     `json:"report_count"`
+}
+
+// AdminAPIKey represents an API key in the admin panel.
+type AdminAPIKey struct {
+	ID        string     `json:"id"`
+	UserID    string     `json:"user_id"`
+	UserEmail string     `json:"user_email"`
+	Prefix    string     `json:"prefix"`
+	Name      string     `json:"name"`
+	CreatedAt time.Time  `json:"created_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	ReportCount int      `json:"report_count"`
+}
+
+// AdminReport represents an IP report in the admin panel.
+type AdminReport struct {
+	ID          int64     `json:"id"`
+	IP          string    `json:"ip"`
+	UserID      string    `json:"user_id"`
+	UserEmail   string    `json:"user_email"`
+	APIKeyID    string    `json:"api_key_id"`
+	APIKeyPrefix string    `json:"api_key_prefix"`
+	Source      string    `json:"source"`
+	ReportedAt  time.Time `json:"reported_at"`
+	Country     string    `json:"country"`
+	CountryName string    `json:"country_name"`
+}
+
+// AdminListOptions holds pagination and filter options for admin lists.
+type AdminListOptions struct {
+	Page     int
+	PageSize int
+	Search   string
+	SortBy   string
+	SortDesc bool
+}
+
+// PaginatedResult holds a paginated list of items.
+type PaginatedResult struct {
+	Items      interface{} `json:"items"`
+	TotalCount int         `json:"total_count"`
+	Page       int         `json:"page"`
+	PageSize   int         `json:"page_size"`
+	TotalPages int         `json:"total_pages"`
+}
+
+// ListUsers returns a paginated list of users with optional search.
+func ListUsers(ctx context.Context, opts AdminListOptions) (PaginatedResult, error) {
+	page := opts.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := opts.PageSize
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	offset := (page - 1) * pageSize
+
+	whereClause := ""
+	args := []any{offset, pageSize}
+	argIdx := 3
+
+	if opts.Search != "" {
+		whereClause = `WHERE email ILIKE $` + strconv.Itoa(argIdx)
+		args = append(args, "%"+opts.Search+"%")
+		argIdx++
+	}
+
+	// Count total
+	countQuery := `SELECT COUNT(*) FROM users` + whereClause
+	var totalCount int
+	err := DB.QueryRow(ctx, countQuery, args[:argIdx-1]...).Scan(&totalCount)
+	if err != nil {
+		return PaginatedResult{}, err
+	}
+
+	// Build sort clause
+	sortBy := "created_at"
+	if opts.SortBy != "" {
+		allowedSort := map[string]bool{"email": true, "created_at": true, "is_admin": true, "key_count": true, "report_count": true}
+		if allowedSort[opts.SortBy] {
+			sortBy = opts.SortBy
+		}
+	}
+	sortDir := "DESC"
+	if !opts.SortDesc {
+		sortDir = "ASC"
+	}
+
+	// Main query
+	query := `
+		SELECT u.id, u.email, u.is_admin, u.created_at,
+		       (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id AND revoked_at IS NULL) AS key_count,
+		       (SELECT COUNT(*) FROM ip_reports WHERE user_id = u.id) AS report_count
+		FROM users u
+	` + whereClause + `
+		ORDER BY ` + sortBy + ` ` + sortDir + `
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := DB.Query(ctx, query, args...)
+	if err != nil {
+		return PaginatedResult{}, err
+	}
+	defer rows.Close()
+
+	users := []AdminUser{}
+	for rows.Next() {
+		var u AdminUser
+		if err := rows.Scan(&u.ID, &u.Email, &u.IsAdmin, &u.CreatedAt, &u.KeyCount, &u.ReportCount); err != nil {
+			return PaginatedResult{}, err
+		}
+		users = append(users, u)
+	}
+
+	totalPages := (totalCount + pageSize - 1) / pageSize
+	return PaginatedResult{
+		Items:      users,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
+}
+
+// GetUserByID returns a user by ID.
+func GetUserByID(ctx context.Context, id string) (AdminUser, error) {
+	var u AdminUser
+	err := DB.QueryRow(ctx, `
+		SELECT u.id, u.email, u.is_admin, u.created_at,
+		       (SELECT COUNT(*) FROM api_keys WHERE user_id = u.id AND revoked_at IS NULL) AS key_count,
+		       (SELECT COUNT(*) FROM ip_reports WHERE user_id = u.id) AS report_count
+		FROM users u WHERE u.id = $1
+	`, id).Scan(&u.ID, &u.Email, &u.IsAdmin, &u.CreatedAt, &u.KeyCount, &u.ReportCount)
+	if err != nil {
+		return AdminUser{}, err
+	}
+	return u, nil
+}
+
+// DeleteUser deletes a user and all associated data (cascades to api_keys and ip_reports).
+func DeleteUser(ctx context.Context, id string) error {
+	_, err := DB.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	return err
+}
+
+// ToggleAdmin toggles the admin flag for a user.
+func ToggleAdmin(ctx context.Context, id string, isAdmin bool) error {
+	_, err := DB.Exec(ctx, `UPDATE users SET is_admin = $1 WHERE id = $2`, isAdmin, id)
+	return err
+}
+
+// ListAPIKeys returns a paginated list of API keys with optional search.
+func ListAPIKeys(ctx context.Context, opts AdminListOptions) (PaginatedResult, error) {
+	page := opts.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := opts.PageSize
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	offset := (page - 1) * pageSize
+
+	whereClause := ""
+	args := []any{offset, pageSize}
+	argIdx := 3
+
+	if opts.Search != "" {
+		whereClause = `WHERE k.key_prefix ILIKE $` + strconv.Itoa(argIdx) + ` OR u.email ILIKE $` + strconv.Itoa(argIdx)
+		args = append(args, "%"+opts.Search+"%")
+		argIdx++
+	}
+
+	// Count total
+	countQuery := `
+		SELECT COUNT(*)
+		FROM api_keys k
+		JOIN users u ON k.user_id = u.id
+	` + whereClause
+	var totalCount int
+	err := DB.QueryRow(ctx, countQuery, args[:argIdx-1]...).Scan(&totalCount)
+	if err != nil {
+		return PaginatedResult{}, err
+	}
+
+	// Build sort clause
+	sortBy := "k.created_at"
+	if opts.SortBy != "" {
+		allowedSort := map[string]bool{"prefix": true, "name": true, "created_at": true, "revoked_at": true, "user_email": true, "report_count": true}
+		if allowedSort[opts.SortBy] {
+			sortBy = opts.SortBy
+		}
+	}
+	sortDir := "DESC"
+	if !opts.SortDesc {
+		sortDir = "ASC"
+	}
+
+	// Main query
+	query := `
+		SELECT k.id, k.user_id, u.email, k.key_prefix, k.name, k.created_at, k.revoked_at,
+		       (SELECT COUNT(*) FROM ip_reports WHERE api_key_id = k.id) AS report_count
+		FROM api_keys k
+		JOIN users u ON k.user_id = u.id
+	` + whereClause + `
+		ORDER BY ` + sortBy + ` ` + sortDir + `
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := DB.Query(ctx, query, args...)
+	if err != nil {
+		return PaginatedResult{}, err
+	}
+	defer rows.Close()
+
+	keys := []AdminAPIKey{}
+	for rows.Next() {
+		var k AdminAPIKey
+		var revokedAt *time.Time
+		if err := rows.Scan(&k.ID, &k.UserID, &k.UserEmail, &k.Prefix, &k.Name, &k.CreatedAt, &revokedAt, &k.ReportCount); err != nil {
+			return PaginatedResult{}, err
+		}
+		k.RevokedAt = revokedAt
+		keys = append(keys, k)
+	}
+
+	totalPages := (totalCount + pageSize - 1) / pageSize
+	return PaginatedResult{
+		Items:      keys,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
+}
+
+// DeleteAPIKey deletes an API key.
+func DeleteAPIKey(ctx context.Context, id string) error {
+	_, err := DB.Exec(ctx, `DELETE FROM api_keys WHERE id = $1`, id)
+	return err
+}
+
+// RevokeAPIKey revokes an API key (sets revoked_at to now).
+func RevokeAPIKey(ctx context.Context, id string) error {
+	_, err := DB.Exec(ctx, `UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, id)
+	return err
+}
+
+// ListReports returns a paginated list of IP reports with optional search.
+func ListReports(ctx context.Context, opts AdminListOptions) (PaginatedResult, error) {
+	page := opts.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := opts.PageSize
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	offset := (page - 1) * pageSize
+
+	whereClause := ""
+	args := []any{offset, pageSize}
+	argIdx := 3
+
+	if opts.Search != "" {
+		whereClause = `WHERE r.ip::text ILIKE $` + strconv.Itoa(argIdx) + ` OR u.email ILIKE $` + strconv.Itoa(argIdx)
+		args = append(args, "%"+opts.Search+"%")
+		argIdx++
+	}
+
+	// Count total
+	countQuery := `
+		SELECT COUNT(*)
+		FROM ip_reports r
+		JOIN users u ON r.user_id = u.id
+	` + whereClause
+	var totalCount int
+	err := DB.QueryRow(ctx, countQuery, args[:argIdx-1]...).Scan(&totalCount)
+	if err != nil {
+		return PaginatedResult{}, err
+	}
+
+	// Build sort clause
+	sortBy := "r.reported_at"
+	if opts.SortBy != "" {
+		allowedSort := map[string]bool{"ip": true, "reported_at": true, "user_email": true, "source": true, "country": true}
+		if allowedSort[opts.SortBy] {
+			sortBy = opts.SortBy
+		}
+	}
+	sortDir := "DESC"
+	if !opts.SortDesc {
+		sortDir = "ASC"
+	}
+
+	// Main query
+	query := `
+		SELECT r.id, r.ip, r.user_id, u.email, r.api_key_id, k.key_prefix, r.source, r.reported_at
+		FROM ip_reports r
+		JOIN users u ON r.user_id = u.id
+		LEFT JOIN api_keys k ON r.api_key_id = k.id
+	` + whereClause + `
+		ORDER BY ` + sortBy + ` ` + sortDir + `
+		LIMIT $1 OFFSET $2
+	`
+
+	rows, err := DB.Query(ctx, query, args...)
+	if err != nil {
+		return PaginatedResult{}, err
+	}
+	defer rows.Close()
+
+	reports := []AdminReport{}
+	for rows.Next() {
+		var r AdminReport
+		var apiKeyPrefix *string
+		if err := rows.Scan(&r.ID, &r.IP, &r.UserID, &r.UserEmail, &r.APIKeyID, &apiKeyPrefix, &r.Source, &r.ReportedAt); err != nil {
+			return PaginatedResult{}, err
+		}
+		if apiKeyPrefix != nil {
+			r.APIKeyPrefix = *apiKeyPrefix
+		}
+		// Resolve country
+		addr, _ := netip.ParseAddr(r.IP)
+		if addr.IsValid() {
+			r.Country, r.CountryName = geoip.CountryOf(addr, geoip.GeoDB)
+		}
+		reports = append(reports, r)
+	}
+
+	totalPages := (totalCount + pageSize - 1) / pageSize
+	return PaginatedResult{
+		Items:      reports,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+	}, nil
+}
+
+// DeleteReport deletes a report by ID.
+func DeleteReport(ctx context.Context, id int64) error {
+	_, err := DB.Exec(ctx, `DELETE FROM ip_reports WHERE id = $1`, id)
+	return err
+}
