@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email         TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    is_admin      BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -61,3 +62,6 @@ CREATE TABLE IF NOT EXISTS blacklist (
     last_seen          TIMESTAMPTZ NOT NULL,
     distinct_reporters INT NOT NULL
 );
+
+-- Admin flag for users; existing databases get it via ALTER below.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;

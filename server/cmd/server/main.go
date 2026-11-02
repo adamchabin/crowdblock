@@ -129,6 +129,23 @@ func main() {
 	mux.Handle("POST /api/v1/geoip/batch", api.RateLimit("geoip-batch", 30, time.Minute, http.HandlerFunc(api.HandleGeoIPBatch)))
 	mux.HandleFunc("GET /api/v1/world", api.HandleWorld)
 
+	// Admin panel routes (require admin authentication)
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("GET /", api.HandleAdminUI)
+	adminMux.HandleFunc("GET /api/users", api.AdminListUsers)
+	adminMux.HandleFunc("GET /api/users/{id}", api.AdminGetUser)
+	adminMux.HandleFunc("DELETE /api/users/{id}", api.AdminDeleteUser)
+	adminMux.HandleFunc("PATCH /api/users/{id}/admin", api.AdminToggleAdmin)
+	adminMux.HandleFunc("GET /api/api-keys", api.AdminListAPIKeys)
+	adminMux.HandleFunc("DELETE /api/api-keys/{id}", api.AdminDeleteAPIKey)
+	adminMux.HandleFunc("PATCH /api/api-keys/{id}/revoke", api.AdminRevokeAPIKey)
+	adminMux.HandleFunc("GET /api/reports", api.AdminListReports)
+	adminMux.HandleFunc("DELETE /api/reports/{id}", api.AdminDeleteReport)
+
+	mux.Handle("GET /admin/", api.RequireAdmin(adminMux))
+	mux.Handle("DELETE /admin/", api.RequireAdmin(adminMux))
+	mux.Handle("PATCH /admin/", api.RequireAdmin(adminMux))
+
 	addr := os.Getenv("LISTEN_ADDR")
 	if addr == "" {
 		addr = ":8080"
