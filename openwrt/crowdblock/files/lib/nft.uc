@@ -100,7 +100,8 @@ function add_whitelist_elements(lines, elems) {
 		let chunk = slice(elems, i, i + CHUNK);
 		let v4 = [], v6 = [];
 		for (let ip in chunk) {
-			(index(ip, ':') >= 0 ? v6 : v4).push(ip);
+			// ucode arrays have no methods: use push()
+			push(index(ip, ':') >= 0 ? v6 : v4, ip);
 		}
 		if (length(v4) > 0)
 			push(lines, 'add element ' + TABLE + ' wl4 { ' + join(', ', v4) + ' }');
