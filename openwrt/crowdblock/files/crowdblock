@@ -615,6 +615,8 @@ function sync(cfg, real, dry_run) {
 
 	try {
 		let sync_start = time();
+		let nft_start = 0;
+		let persist_start = 0;
 		let fetch_start = time();
 		let res = fetch_blocklist(cfg, st.list_etag);
 		debug(cfg, 'sync: fetch_blocklist took %d ms', ms_since(fetch_start));
