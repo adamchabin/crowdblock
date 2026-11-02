@@ -676,8 +676,9 @@ function sync(cfg, real, dry_run) {
 		}
 		debug(cfg, 'sync: nftables exists check done, err=%s', err ?? 'none');
 
+		// Skip nft.apply entirely if list not modified (304) - nftables already has correct state.
 		let nft_start = clock(true);
-		if (!err) {
+		if (!err && !res.not_modified) {
 			let paused = load_paused();
 			err = nft.apply(cfg, st.entries, now, paused);
 
@@ -691,6 +692,8 @@ function sync(cfg, real, dry_run) {
 				debug(cfg, 'nftables: %d IPv4 + %d IPv6 addresses set, %d paused, %d ms%s',
 					v4, v6, p, ms_since(nft_start), err ? ' – ' + err : '');
 			}
+		} else if (res.not_modified) {
+			debug(cfg, 'sync: nft.apply skipped (304 not modified)');
 		}
 		debug(cfg, 'sync: nft.apply took %d ms', ms_since(nft_start));
 
