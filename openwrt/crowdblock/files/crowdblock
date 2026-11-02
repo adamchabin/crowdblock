@@ -402,6 +402,7 @@ function some(list, max) {
 function merge(cfg, st, wl, now, dry_run) {
 	let stats = { added: 0, refreshed: 0, invalid: 0, whitelisted: 0, below: 0, full: 0 };
 	let seen = { added: [], whitelisted: [], below: [], full: [] };  // for debug
+	let limit = cfg.seen_debug_limit ?? 20;
 	let count = length(keys(st.entries));
 	let expires = now + cfg.block_time;
 
@@ -415,7 +416,7 @@ function merge(cfg, st, wl, now, dry_run) {
 		// Don't rely on the server-side filter alone.
 		if (!(type(e.reports) in [ 'int', 'double' ]) || e.reports < cfg.min_reports) {
 			stats.below++;
-			push(seen.below, e.ip);
+			if (length(seen.below) < limit) push(seen.below, e.ip);
 			return;
 		}
 
@@ -442,7 +443,7 @@ function merge(cfg, st, wl, now, dry_run) {
 
 		if (whitelisted(wl, bytes)) {
 			stats.whitelisted++;
-			push(seen.whitelisted, e.ip);
+			if (length(seen.whitelisted) < limit) push(seen.whitelisted, e.ip);
 			return;
 		}
 
@@ -454,12 +455,12 @@ function merge(cfg, st, wl, now, dry_run) {
 			if (e.sources)
 				st.sources[ip] = e.sources;
 			stats.added++;
-			push(seen.added, ip);
+			if (length(seen.added) < limit) push(seen.added, ip);
 			count++;
 		}
 		else {
 			stats.full++;
-			push(seen.full, ip);
+			if (length(seen.full) < limit) push(seen.full, ip);
 		}
 	});
 
@@ -492,12 +493,12 @@ function merge(cfg, st, wl, now, dry_run) {
 			st.static[ip] = true;
 			configured[ip] = true;
 			stats.added++;
-			push(seen.added, ip);
+				if (length(seen.added) < limit) push(seen.added, ip);
 			count++;
 		}
 		else {
 			stats.full++;
-			push(seen.full, ip);
+				if (length(seen.full) < limit) push(seen.full, ip);
 		}
 	}
 
