@@ -679,7 +679,7 @@ function sync(cfg, real, dry_run) {
 		let nft_start = clock(true);
 		if (!err) {
 			let paused = load_paused();
-			err = nft.apply(st.entries, now, paused);
+			err = nft.apply(cfg, st.entries, now, paused);
 
 			if (cfg.debug) {
 				let v4 = 0, v6 = 0, p = 0;
@@ -904,7 +904,7 @@ function cmd_run(cfg) {
 
 	// After a restart, restore what we had before the first download.
 	drop_expired(st, time());
-	err = nft.apply(st.entries, time(), load_paused());
+	err = nft.apply(cfg, st.entries, time(), load_paused());
 	if (err)
 		error_log('cannot restore previous blocks: %s', err);
 
@@ -983,7 +983,7 @@ function cmd_sync(cfg, dry_run) {
 			fatal(`cannot create nftables table: ${err}`);
 
 		drop_expired(st, time());
-		nft.apply(st.entries, time(), load_paused());
+		nft.apply(cfg, st.entries, time(), load_paused());
 	}
 
 	exit(sync(cfg, st, dry_run) ? 0 : 1);

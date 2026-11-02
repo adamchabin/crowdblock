@@ -10,7 +10,16 @@ import { open, popen, unlink } from 'fs';
 
 const TABLE = 'inet crowdblock';
 const BATCH_FILE = '/tmp/crowdblock/batch.nft';
-const CHUNK = 256;
+const CHUNK = 2048;
+
+// Higher precision timer using clock() which returns seconds with microsecond precision.
+function timer_start() {
+	return clock();
+}
+
+function timer_elapsed_ms(start) {
+	return int((clock() - start) * 1000);
+}
 
 // Shell timeout: busybox/coreutils `timeout` kills the command after `secs`
 // and exits 124. If `timeout` is missing, the command runs without a limit
@@ -116,7 +125,7 @@ function add_elements(lines, set, elems) {
 // `entries` is { ip: expires_at_epoch }, addresses in `paused` are skipped.
 // Kernel timeouts are a safety net: if the daemon dies, blocks still expire
 // on time.
-function apply(entries, now, paused) {
+function apply(cfg, entries, now, paused) {
 	let v4 = [], v6 = [];
 
 	for (let ip, expires in entries) {
@@ -125,14 +134,20 @@ function apply(entries, now, paused) {
 			push(index(ip, ':') >= 0 ? v6 : v4, `${ip} timeout ${ttl}s`);
 	}
 
-	let lines = [];
-	add_elements(lines, 'v4', v4);
-	add_elements(lines, 'v6', v6);
-
-	if (length(lines) == 0)
+	if (length(v4) == 0 && length(v6) == 0)
 		return null; // nothing to add
 
-	return run_batch(join('\n', lines) + '\n');
+	// Combine v4 and v6 into a single batch for better performance
+	let lines = [];
+	let apply_start = timer_start();
+	if (length(v4) > 0)
+		add_elements(lines, 'v4', v4);
+	if (length(v6) > 0)
+		add_elements(lines, 'v6', v6);
+
+	let err = run_batch(join('\n', lines) + '\n');
+	debug(cfg, 'nft.apply: batch took %d ms', timer_elapsed_ms(apply_start));
+	return err;
 }
 
 // Single-element changes for `crowdblock pause` / `resume`.
