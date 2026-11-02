@@ -405,6 +405,7 @@ function merge(cfg, st, wl, now, dry_run) {
 	let count = length(keys(st.entries));
 	let expires = now + cfg.block_time;
 
+	let merge_start = time();
 	stats.error = each_entry(function(e) {
 		if (type(e) != 'object' || type(e.ip) != 'string') {
 			stats.invalid++;
@@ -523,6 +524,7 @@ function merge(cfg, st, wl, now, dry_run) {
 		if (length(seen[k]))
 			debug(cfg, 'merge: %s: %s', k, some(seen[k], 20));
 
+	debug(cfg, 'merge: total took %d ms', ms_since(merge_start));
 	return stats;
 }
 
@@ -612,6 +614,7 @@ function sync(cfg, real, dry_run) {
 	};
 
 	try {
+		let sync_start = time();
 		let fetch_start = time();
 		let res = fetch_blocklist(cfg, st.list_etag);
 		debug(cfg, 'sync: fetch_blocklist took %d ms', ms_since(fetch_start));
@@ -657,6 +660,76 @@ function sync(cfg, real, dry_run) {
 			stats = { added: 0, refreshed: 0, whitelisted: 0, below: 0, invalid: 0, full: 0, removed: 0, new_ips: [] };
 			debug(cfg, 'sync: merge took %d ms', ms_since(merge_start));
 		}
+
+		if (stats.error) {
+			st.last_error = stats.error;
+			state_dirty = true;
+			persist(st);
+			error_log('sync failed: %s', stats.error);
+			release_lock_on_exit();
+			return false;
+		}
+
+		if (dry_run) {
+			// The downloaded list file is now the new one; keep its etag
+			// matching it (the next real sync merges from the file anyway).
+			if (real.list_etag != res.etag) {
+				real.list_etag = res.etag;
+				state_dirty = true;
+				save_state(real);
+			}
+			report_dry_run(cfg, st, stats, load_paused());
+			release_lock_on_exit();
+			return true;
+		}
+
+		// `/etc/init.d/firewall stop|restart` (fw4 flush) deletes all nftables
+		// tables, ours included - recreate it instead of failing until restart.
+		if (!nft.exists()) {
+			warn_log('nftables table missing (firewall restarted?), recreating it');
+			err = nft.setup(cfg);
+			if (!err)
+				state_dirty = true;
+		}
+		debug(cfg, 'sync: nftables exists check done, err=%s', err ?? 'none');
+
+		// Skip nft.apply entirely if list not modified (304) - nftables already has correct state.
+		let nft_start = time();
+		if (!err && !res.not_modified) {
+			let paused = load_paused();
+			err = nft.apply(cfg, st.entries, now, paused);
+
+			if (cfg.debug) {
+				let v4 = 0, v6 = 0, p = 0;
+				for (let ip in st.entries)
+					if (ip in paused)
+						p++;
+					else
+						(index(ip, ':') >= 0) ? v6++ : v4++;
+				debug(cfg, 'nftables: %d IPv4 + %d IPv6 addresses set, %d paused, %d ms%s',
+					v4, v6, p, ms_since(nft_start), err ? ' – ' + err : '');
+			}
+		} else if (res.not_modified) {
+			debug(cfg, 'sync: nft.apply skipped (304 not modified)');
+		}
+		debug(cfg, 'sync: nft.apply took %d ms', ms_since(nft_start));
+
+		let persist_start = time();
+		st.list_etag = res.etag;
+		st.last_sync = now;
+		st.last_error = err;
+		st.list_size = stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full;
+		state_dirty = true;
+		persist(st);
+		debug(cfg, 'sync: persist took %d ms', ms_since(persist_start));
+
+		if (err) {
+			error_log('nft update failed: %s', err);
+			release_lock_on_exit();
+			return false;
+		}
+
+		debug(cfg, 'sync: done in %d ms', ms_since(sync_start));
 
 		if (stats.error) {
 			st.last_error = stats.error;
