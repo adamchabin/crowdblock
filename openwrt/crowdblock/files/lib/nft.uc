@@ -74,52 +74,70 @@ function set_of(ip) {
 
 function hook_chain(name, hook) {
 	return `	chain ${name} {
-		type filter hook ${hook} priority filter - 10; policy accept;
+		type filter hook ${hook} priority filter -10; policy accept;
+		ip saddr @wl4 accept
+		ip6 saddr @wl6 accept
 		ip saddr @v4 counter drop
 		ip6 saddr @v6 counter drop
 	}
 `;
-}
-
-// (Re)creates the table with empty sets. The first line makes sure the
-// table exists so that `delete` never fails.
-function setup(cfg) {
-	let script = `table ${TABLE}
-delete table ${TABLE}
-table ${TABLE} {
-	set v4 {
-		type ipv4_addr
-		flags timeout
-		size ${cfg.max_entries}
-	}
-	set v6 {
-		type ipv6_addr
-		flags timeout
-		size ${cfg.max_entries}
-	}
-${hook_chain('input', 'input')}`;
-
-	if (cfg.block_forward)
-		script += hook_chain('forward', 'forward');
-
-	script += '}\n';
-
-	return run_batch(script);
-}
-
-function exists() {
-	let p = popen(with_timeout('nft list tables | grep -qx \'table ' + TABLE + '\'', 10), 'r');
-	let rc = p.close();
-	return rc == 0;
-}
-
-function teardown() {
-	return run_batch(`table ${TABLE}\ndelete table ${TABLE}\n`);
-}
 
 function add_elements(lines, set, elems) {
 	for (let i = 0; i < length(elems); i += CHUNK)
 		push(lines, `add element ${TABLE} ${set} { ${join(', ', slice(elems, i, i + CHUNK))} }`);
+}
+
+// Helper to add elements to a set (similar to add_elements but for custom sets)
+function add_set_elements(lines, set, elems) {
+	for (let i = 0; i < length(elems); i += CHUNK) {
+		push(lines, `add element ${TABLE} ${set} { ${join(', ', slice(elems, i, i + CHUNK))} }`);
+	}
+}
+
+// Adds whitelist elements to wl4/wl6 sets (no timeout for whitelist).
+function add_whitelist_elements(lines, elems) {
+	for (let i = 0; i < length(elems); i += CHUNK) {
+		let chunk = slice(elems, i, i + CHUNK);
+		let v4 = [], v6 = [];
+		for (let ip in chunk) {
+			(index(ip, ':') >= 0 ? v6 : v4).push(ip);
+		}
+		if (length(v4) > 0)
+			push(lines, `add element ${TABLE} wl4 { ${join(', ', v4)} }`);
+		if (length(v6) > 0)
+			push(lines, `add element ${TABLE} wl6 { ${join(', ', v6)} }`);
+	}
+}
+
+// Creates the nftables table, sets, and chains if they don't exist.
+// Returns null on success, error string on failure.
+function setup(cfg) {
+	let lines = [
+		`table ${TABLE} {`,
+		`	set v4 { type ipv4_addr; flags timeout; }`,
+		`	set v6 { type ipv6_addr; flags timeout; }`,
+		`	set wl4 { type ipv4_addr; }`,
+		`	set wl6 { type ipv6_addr; }`,
+		hook_chain('input', 'input'),
+		hook_chain('forward', 'forward'),
+		`}`
+	];
+	return run_batch(join('\n', lines) + '\n');
+}
+
+// Checks if the nftables table exists.
+function exists() {
+	let p = popen(with_timeout(`nft list table ${TABLE} 2>/dev/null`, 10), 'r');
+	if (!p)
+		return false;
+	let out = p.read('all');
+	p.close();
+	return length(out) > 0;
+}
+
+// Removes the entire nftables table (unblocks everything).
+function teardown() {
+	return run_cmd(`delete table ${TABLE}`);
 }
 
 // Replaces the contents of both sets atomically (one nft transaction).
@@ -170,9 +188,10 @@ function counters() {
 		if (!p)
 			continue;
 
-		for (let line = p.read('line'); length(line); line = p.read('line'))
+		for (let line = p.read('line'); length(line); line = p.read('line')) {
 			if (index(line, 'counter') >= 0)
 				push(out, `${chain}: ${trim(line)}`);
+		}
 
 		p.close();
 	}
@@ -180,4 +199,4 @@ function counters() {
 	return out;
 }
 
-export { setup, exists, teardown, apply, block, unblock, counters };
+export { setup, exists, teardown, apply, block, unblock, counters, add_whitelist_elements, run_batch };

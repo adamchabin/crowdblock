@@ -17,7 +17,7 @@ import { rand, srand } from 'math';
 
 import { load as load_config, load_paused, save_paused } from 'crowdblock.config';
 import { debug, info, warn_log, error_log, ms_since } from 'crowdblock.logging';
-import { whitelist, whitelisted, parse_cidr } from 'crowdblock.ip';
+import { whitelist, parse_cidr } from 'crowdblock.ip';
 import { fetch_blocklist, each_entry, report_ip, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
 
@@ -399,9 +399,10 @@ function some(list, max) {
 // Merges the downloaded list into the state, entry by entry (the list is
 // never held in memory as a whole). Returns stats, with `error` if the list
 // couldn't be read.
+// Whitelist check is now done in nftables (wl4/wl6 sets), not here.
 function merge(cfg, st, wl, now, dry_run) {
-	let stats = { added: 0, refreshed: 0, invalid: 0, whitelisted: 0, below: 0, full: 0 };
-	let seen = { added: [], whitelisted: [], below: [], full: [] };  // for debug
+	let stats = { added: 0, refreshed: 0, invalid: 0, below: 0, full: 0 };
+	let seen = { added: [], below: [], full: [] };  // for debug
 	let limit = cfg.seen_debug_limit ?? 20;
 	let count = length(keys(st.entries));
 	let expires = now + cfg.block_time;
@@ -428,8 +429,7 @@ function merge(cfg, st, wl, now, dry_run) {
 
 		let ip = arrtoip(bytes);  // canonical form
 
-		// Already blocked: refresh it. purge_whitelisted() already removed any
-		// state entry that became whitelisted, so no whitelist check needed here.
+		// Already blocked: refresh it.
 		if (exists(st.entries, ip)) {
 			st.entries[ip] = expires;
 			st.reports[ip] = e.reports;
@@ -438,12 +438,6 @@ function merge(cfg, st, wl, now, dry_run) {
 			if (e.sources)
 				st.sources[ip] = e.sources;
 			stats.refreshed++;
-			return;
-		}
-
-		if (whitelisted(wl, bytes)) {
-			stats.whitelisted++;
-			if (length(seen.whitelisted) < limit) push(seen.whitelisted, e.ip);
 			return;
 		}
 
@@ -480,8 +474,6 @@ function merge(cfg, st, wl, now, dry_run) {
 		if (!bytes)
 			continue;
 		let ip = arrtoip(bytes);
-		if (whitelisted(wl, bytes))
-			continue;
 		if (exists(st.entries, ip)) {
 			st.entries[ip] = now + cfg.block_time;
 			st.static[ip] = true;
@@ -522,52 +514,15 @@ function merge(cfg, st, wl, now, dry_run) {
 		state_dirty = true;
 	}
 
-	debug(cfg, 'merge: %d on the list: %d new, %d refreshed, %d whitelisted, %d below min_reports, %d invalid, %d over max_entries',
-		stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full,
-		stats.added, stats.refreshed, stats.whitelisted, stats.below, stats.invalid, stats.full);
-	for (let k in [ 'added', 'whitelisted', 'below', 'full' ])
+	debug(cfg, 'merge: %d on the list: %d new, %d refreshed, %d below min_reports, %d invalid, %d over max_entries',
+		stats.added + stats.refreshed + stats.below + stats.invalid + stats.full,
+		stats.added, stats.refreshed, stats.below, stats.invalid, stats.full);
+	for (let k in [ 'added', 'below', 'full' ])
 		if (length(seen[k]))
 			debug(cfg, 'merge: %s: %s', k, some(seen[k], 20));
 
 	debug(cfg, 'merge: total took %d ms', ms_since(merge_start));
 	return stats;
-}
-
-// Entries may have been whitelisted after they were blocked.
-function purge_whitelisted(st, wl) {
-	let n = 0;
-
-	// Exact-match lookup for single-address nets (/32 /128): most whitelist
-	// entries are single IPs, so this makes the common check O(1) instead of a
-	// linear scan over every net for each state entry.
-	let exact = {};
-	for (let net in wl)
-		if (net.len == length(net.bytes) * 8)
-			exact[arrtoip(net.bytes)] = true;
-
-	for (let ip in keys(st.entries)) {
-		let is_whitelisted = exact[ip];
-
-		if (!is_whitelisted) {
-			let bytes = iptoarr(ip);
-			if (bytes) {
-				// Single IP
-				is_whitelisted = whitelisted(wl, bytes);
-			} else {
-				// CIDR - we check if the network address is whitelisted
-				let cidr = parse_cidr(ip);
-				if (cidr)
-					is_whitelisted = whitelisted(wl, cidr.bytes);
-			}
-		}
-
-		if (is_whitelisted) {
-			forget(st, ip);
-			n++;
-		}
-	}
-
-	return n;
 }
 
 // What a dry run would have done, on stdout.
@@ -579,8 +534,8 @@ function report_dry_run(cfg, st, stats, paused) {
 	log('dry run: nothing was changed (no nftables update, state not saved)');
 	log('would block %d addresses in total: %d new, %d refreshed, %d removed from static_block',
 		n, stats.added, stats.refreshed, stats.removed);
-	log('skipped: %d whitelisted, %d below min_reports (%d), %d invalid, %d over max_entries (%d)',
-		stats.whitelisted, stats.below, cfg.min_reports, stats.invalid, stats.full, cfg.max_entries);
+	log('skipped: %d below min_reports (%d), %d invalid, %d over max_entries (%d)',
+		stats.below, cfg.min_reports, stats.invalid, stats.full, cfg.max_entries);
 
 	let p = 0;
 	for (let ip in keys(st.entries))
@@ -650,18 +605,21 @@ function sync(cfg, real, dry_run) {
 		let wl_start = time();
 		let wl = build_whitelist(cfg);
 		debug(cfg, 'sync: build_whitelist took %d ms', ms_since(wl_start));
-		let purge_start = time();
-		let purged = 0;
-		if (!res.not_modified) {
-			purged = purge_whitelisted(st, wl);
-			debug(cfg, 'sync: purge_whitelisted took %d ms', ms_since(purge_start));
-			if (purged) {
-				debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
-				state_dirty = true;
+
+		// Populate whitelist sets in nftables before applying blocklist
+		if (!dry_run && !res.not_modified) {
+			let wl_ips = [];
+			for (let net in wl)
+				push(wl_ips, arrtoip(net.bytes));
+			if (length(wl_ips) > 0) {
+				let lines = [];
+				nft.add_whitelist_elements(lines, wl_ips);
+				err = nft.run_batch(join('\n', lines) + '\n');
+				if (err)
+					warn_log('failed to populate whitelist sets: %s', err);
 			}
-		} else {
-			debug(cfg, 'sync: purge_whitelisted skipped (304 not modified)');
 		}
+
 		// Skip merge entirely if list not modified (304) - state is already current.
 		let merge_start = time();
 		let stats;
@@ -673,7 +631,7 @@ function sync(cfg, real, dry_run) {
 		} else {
 			debug(cfg, 'sync: merge skipped (304 not modified)');
 			// When 304, we still need stats for the log line, but they're all zero.
-			stats = { added: 0, refreshed: 0, whitelisted: 0, below: 0, invalid: 0, full: 0, removed: 0, new_ips: [] };
+			stats = { added: 0, refreshed: 0, below: 0, invalid: 0, full: 0, removed: 0, new_ips: [] };
 			debug(cfg, 'sync: merge took %d ms', ms_since(merge_start));
 		}
 
@@ -734,7 +692,7 @@ function sync(cfg, real, dry_run) {
 		st.list_etag = res.etag;
 		st.last_sync = now;
 		st.last_error = err;
-		st.list_size = stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full;
+		st.list_size = stats.added + stats.refreshed + stats.below + stats.invalid + stats.full;
 		state_dirty = true;
 		persist(st);
 		debug(cfg, 'sync: persist took %d ms', ms_since(persist_start));
@@ -776,14 +734,14 @@ function sync(cfg, real, dry_run) {
 			: res.delta_failed ? sprintf(' (full list, delta rejected: %s)', res.delta_failed)
 			: '';
 
-		let line = sprintf('sync ok%s: %d blocked (+%d new, %d refreshed, %d whitelisted, %d purged, %d invalid%s)',
+		let line = sprintf('sync ok%s: %d blocked (+%d new, %d refreshed, %d invalid%s)',
 			how,
 			length(keys(st.entries)), stats.added, stats.refreshed,
-			stats.whitelisted, purged, stats.invalid,
+			stats.invalid,
 			stats.full ? sprintf(', %d dropped: max_entries reached', stats.full) : '');
 
 		// A sync that changed nothing runs every few minutes: debug only.
-		if (stats.added || stats.removed || stats.full || purged)
+		if (stats.added || stats.removed || stats.full)
 			info('%s', line);
 		else
 			debug(cfg, '%s', line);
