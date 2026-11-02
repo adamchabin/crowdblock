@@ -632,11 +632,17 @@ function sync(cfg, real, dry_run) {
 		let wl = build_whitelist(cfg);
 		debug(cfg, 'sync: build_whitelist took %d ms', ms_since(wl_start));
 		let purge_start = time();
-		let purged = purge_whitelisted(st, wl);
-		debug(cfg, 'sync: purge_whitelisted took %d ms', ms_since(purge_start));
-		if (purged) {
-			debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
-			state_dirty = true;
+		let purge_start = time();
+		let purged = 0;
+		if (!res.not_modified) {
+			purged = purge_whitelisted(st, wl);
+			debug(cfg, 'sync: purge_whitelisted took %d ms', ms_since(purge_start));
+			if (purged) {
+				debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
+				state_dirty = true;
+			}
+		} else {
+			debug(cfg, 'sync: purge_whitelisted skipped (304 not modified)');
 		}
 		// Skip merge entirely if list not modified (304) - state is already current.
 		let merge_start = time();
