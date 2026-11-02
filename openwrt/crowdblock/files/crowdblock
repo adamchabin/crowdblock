@@ -396,6 +396,9 @@ function some(list, max) {
 	return (length(list) > max) ? sprintf('%s and %d more', shown, length(list) - max) : shown;
 }
 
+const DEFAULT_GC_INTERVAL = 1000;  // ucode's default
+const MERGE_GC_INTERVAL = 100000;
+
 // Merges the downloaded list into the state, entry by entry (the list is
 // never held in memory as a whole). Returns stats, with `error` if the list
 // couldn't be read.
@@ -408,6 +411,11 @@ function merge(cfg, st, wl, now, dry_run) {
 	let expires = now + cfg.block_time;
 
 	let merge_start = time();
+
+	// ucode's GC walks the whole heap every `interval` allocations. With
+	// hundreds of thousands of live state keys that makes the loop quadratic
+	// (462 s for 216k entries on a router), so collect rarely while merging.
+	gc('start', MERGE_GC_INTERVAL);
 	stats.error = each_entry(function(e) {
 		if (type(e) != 'object' || type(e.ip) != 'string') {
 			stats.invalid++;
@@ -457,6 +465,8 @@ function merge(cfg, st, wl, now, dry_run) {
 			if (length(seen.full) < limit) push(seen.full, ip);
 		}
 	});
+	gc('start', DEFAULT_GC_INTERVAL);
+	gc('collect');
 
 	// Static blocklist: addresses from /etc/config/crowdblock that are
 	// always blocked, independently of the server.

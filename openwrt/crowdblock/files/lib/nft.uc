@@ -77,6 +77,8 @@ function hook_chain(name, hook) {
 		'		type filter hook ' + hook + ' priority filter -10; policy accept;\n' +
 		'		ip saddr @wl4 accept\n' +
 		'		ip6 saddr @wl6 accept\n' +
+		'		ip saddr @wl4_pfx accept\n' +
+		'		ip6 saddr @wl6_pfx accept\n' +
 		'		ip saddr @v4 counter drop\n' +
 		'		ip6 saddr @v6 counter drop\n' +
 		'	}\n';
@@ -87,26 +89,35 @@ function add_elements(lines, set, elems) {
 		push(lines, 'add element ' + TABLE + ' ' + set + ' { ' + join(', ', slice(elems, i, i + CHUNK)) + ' }');
 }
 
-// Helper to add elements to a set (similar to add_elements but for custom sets)
-function add_set_elements(lines, set, elems) {
-	for (let i = 0; i < length(elems); i += CHUNK) {
-		push(lines, 'add element ' + TABLE + ' ' + set + ' { ' + join(', ', slice(elems, i, i + CHUNK)) + ' }');
-	}
-}
-
 // Adds whitelist elements to wl4/wl6 sets (no timeout for whitelist).
+// `elems` is an array of IPs or CIDRs (e.g. "192.168.1.1" or "192.168.1.0/24").
 function add_whitelist_elements(lines, elems) {
 	for (let i = 0; i < length(elems); i += CHUNK) {
 		let chunk = slice(elems, i, i + CHUNK);
-		let v4 = [], v6 = [];
+		let v4 = [], v6 = [], v4_pfx = [], v6_pfx = [];
 		for (let ip in chunk) {
-			// ucode arrays have no methods: use push()
-			push(index(ip, ':') >= 0 ? v6 : v4, ip);
+			if (index(ip, '/') >= 0) {
+				// CIDR prefix
+				if (index(ip, ':') >= 0)
+					push(v6_pfx, ip);
+				else
+					push(v4_pfx, ip);
+			} else {
+				// Single IP
+				if (index(ip, ':') >= 0)
+					push(v6, ip);
+				else
+					push(v4, ip);
+			}
 		}
 		if (length(v4) > 0)
 			push(lines, 'add element ' + TABLE + ' wl4 { ' + join(', ', v4) + ' }');
 		if (length(v6) > 0)
 			push(lines, 'add element ' + TABLE + ' wl6 { ' + join(', ', v6) + ' }');
+		if (length(v4_pfx) > 0)
+			push(lines, 'add element ' + TABLE + ' wl4_pfx { ' + join(', ', v4_pfx) + ' }');
+		if (length(v6_pfx) > 0)
+			push(lines, 'add element ' + TABLE + ' wl6_pfx { ' + join(', ', v6_pfx) + ' }');
 	}
 }
 
@@ -119,6 +130,8 @@ function setup(cfg) {
 		'	set v6 { type ipv6_addr; flags timeout; }',
 		'	set wl4 { type ipv4_addr; }',
 		'	set wl6 { type ipv6_addr; }',
+		'	set wl4_pfx { type ipv4_prefix; }',
+		'	set wl6_pfx { type ipv6_prefix; }',
 		hook_chain('input', 'input'),
 		hook_chain('forward', 'forward'),
 		'}'
@@ -170,6 +183,47 @@ function apply(cfg, entries, now, paused) {
 	return err;
 }
 
+// Applies whitelist + blocklist in a single atomic transaction.
+// `wl_elems` = whitelist IPs/CIDRs, `entries` = { ip: expires_at_epoch }.
+function apply_atomic(cfg, wl_elems, entries, now, paused) {
+	let v4 = [], v6 = [];
+
+	for (let ip, expires in entries) {
+		let ttl = expires - now;
+		if (ttl > 0 && !(ip in (paused ?? [])))
+			push(index(ip, ':') >= 0 ? v6 : v4, ip + ' timeout ' + ttl + 's');
+	}
+
+	let lines = [];
+	let apply_start = timer_start();
+
+	// Whitelist first (exact IPs)
+	if (length(wl_elems) > 0) {
+		let v4 = [], v6 = [], v4_pfx = [], v6_pfx = [];
+		for (let ip in wl_elems) {
+			if (index(ip, '/') >= 0) {
+				if (index(ip, ':') >= 0) push(v6_pfx, ip);
+				else push(v4_pfx, ip);
+			} else {
+				if (index(ip, ':') >= 0) push(v6, ip);
+				else push(v4, ip);
+			}
+		}
+		if (length(v4) > 0) push(lines, 'add element ' + TABLE + ' wl4 { ' + join(', ', v4) + ' }');
+		if (length(v6) > 0) push(lines, 'add element ' + TABLE + ' wl6 { ' + join(', ', v6) + ' }');
+		if (length(v4_pfx) > 0) push(lines, 'add element ' + TABLE + ' wl4_pfx { ' + join(', ', v4_pfx) + ' }');
+		if (length(v6_pfx) > 0) push(lines, 'add element ' + TABLE + ' wl6_pfx { ' + join(', ', v6_pfx) + ' }');
+	}
+
+	// Blocklist
+	if (length(v4) > 0) add_elements(lines, 'v4', v4);
+	if (length(v6) > 0) add_elements(lines, 'v6', v6);
+
+	let err = run_batch(join('\n', lines) + '\n');
+	debug(cfg, 'nft.apply_atomic: batch took %d ms', timer_elapsed_ms(apply_start));
+	return err;
+}
+
 // Single-element changes for `crowdblock pause` / `resume`.
 function block(ip, ttl) {
 	return run_cmd('add element ' + TABLE + ' ' + set_of(ip) + ' { ' + ip + ' timeout ' + ttl + 's }');
@@ -200,4 +254,4 @@ function counters() {
 	return out;
 }
 
-export { setup, exists, teardown, apply, block, unblock, counters, add_whitelist_elements, run_batch };
+export { setup, exists, teardown, apply, apply_atomic, block, unblock, counters, add_whitelist_elements, run_batch };
