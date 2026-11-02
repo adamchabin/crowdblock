@@ -632,7 +632,6 @@ function sync(cfg, real, dry_run) {
 		let wl = build_whitelist(cfg);
 		debug(cfg, 'sync: build_whitelist took %d ms', ms_since(wl_start));
 		let purge_start = time();
-		let purge_start = time();
 		let purged = 0;
 		if (!res.not_modified) {
 			purged = purge_whitelisted(st, wl);
