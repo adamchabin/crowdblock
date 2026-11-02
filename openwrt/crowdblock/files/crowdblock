@@ -612,7 +612,9 @@ function sync(cfg, real, dry_run) {
 	};
 
 	try {
+		let fetch_start = clock(true);
 		let res = fetch_blocklist(cfg, st.list_etag);
+		debug(cfg, 'sync: fetch_blocklist took %d ms', ms_since(fetch_start));
 		let err = res.error;
 
 		if (err) {
@@ -626,13 +628,19 @@ function sync(cfg, real, dry_run) {
 			return false;
 		}
 
+		let wl_start = clock(true);
 		let wl = build_whitelist(cfg);
+		debug(cfg, 'sync: build_whitelist took %d ms', ms_since(wl_start));
+		let purge_start = clock(true);
 		let purged = purge_whitelisted(st, wl);
+		debug(cfg, 'sync: purge_whitelisted took %d ms', ms_since(purge_start));
 		if (purged) {
 			debug(cfg, 'sync: %d blocked entries now whitelisted, removed', purged);
 			state_dirty = true;
 		}
+		let merge_start = clock(true);
 		let stats = merge(cfg, st, wl, now, dry_run);
+		debug(cfg, 'sync: merge took %d ms', ms_since(merge_start));
 		if (stats.added > 0 || stats.refreshed > 0 || stats.full > 0 || stats.removed > 0)
 			state_dirty = true;
 
@@ -684,13 +692,16 @@ function sync(cfg, real, dry_run) {
 					v4, v6, p, ms_since(nft_start), err ? ' – ' + err : '');
 			}
 		}
+		debug(cfg, 'sync: nft.apply took %d ms', ms_since(nft_start));
 
+		let persist_start = clock(true);
 		st.list_etag = res.etag;
 		st.last_sync = now;
 		st.last_error = err;
 		st.list_size = stats.added + stats.refreshed + stats.whitelisted + stats.below + stats.invalid + stats.full;
 		state_dirty = true;
 		persist(st);
+		debug(cfg, 'sync: persist took %d ms', ms_since(persist_start));
 
 		if (err) {
 			error_log('nft update failed: %s', err);
