@@ -676,9 +676,9 @@ function sync(cfg, real, dry_run) {
 		}
 		debug(cfg, 'sync: nftables exists check done, err=%s', err ?? 'none');
 
+		let nft_start = clock(true);
 		if (!err) {
 			let paused = load_paused();
-			let nft_start = clock(true);
 			err = nft.apply(st.entries, now, paused);
 
 			if (cfg.debug) {
