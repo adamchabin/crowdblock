@@ -121,7 +121,8 @@ return view.extend({
 				_('Must be at most half of the block time');
 		});
 
-		o = s.taboption('advanced', form.Value, 'max_entries', _('Maximum entries'));
+		o = s.taboption('advanced', form.Value, 'max_entries', _('Maximum entries'),
+			_('Maximum number of blocked IP addresses stored in nftables on this router. Protects RAM on small devices. If the server returns more addresses, only this many will be kept. Default: 20000.'));
 		o.datatype = 'range(1,500000)';
 		o.placeholder = '20000';
 

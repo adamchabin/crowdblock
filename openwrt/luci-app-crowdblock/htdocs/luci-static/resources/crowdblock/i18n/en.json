@@ -45,6 +45,7 @@
 	"Last successful sync": "Last successful sync",
 	"Last sync": "Last sync",
 	"Maximum entries": "Maximum entries",
+	"Maximum number of blocked IP addresses stored in nftables on this router. Protects RAM on small devices. If the server returns more addresses, only this many will be kept. Default: 20000.": "Maximum number of blocked IP addresses stored in nftables on this router. Protects RAM on small devices. If the server returns more addresses, only this many will be kept. Default: 20000.",
 	"Max addresses per sync": "Max addresses per sync",
 	"Maximum number of IP addresses the server returns per sync. 0 = unlimited.": "Maximum number of IP addresses the server returns per sync. 0 = unlimited.",
 	"Max response body": "Max response body",
