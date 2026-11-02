@@ -13,13 +13,13 @@ const TABLE = 'inet crowdblock';
 const BATCH_FILE = '/tmp/crowdblock/batch.nft';
 const CHUNK = 2048;
 
-// Higher precision timer using clock() which returns seconds with microsecond precision.
+// Higher precision timer using time() which returns seconds with microsecond precision.
 function timer_start() {
-	return clock();
+	return time();
 }
 
 function timer_elapsed_ms(start) {
-	return int((clock() - start) * 1000);
+	return int((time() - start) * 1000);
 }
 
 // Shell timeout: busybox/coreutils `timeout` kills the command after `secs`
