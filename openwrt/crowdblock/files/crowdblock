@@ -241,8 +241,6 @@ function release_lock() {
 
 // --- whitelist ----------------------------------------------------------
 
-const ntp_servers = [ 'time.google.com', 'time.windows.com', 'pool.ntp.org' ];
-
 // Resolved addresses are cached: a sync every few minutes must not run
 // nslookup (and wait out its timeout when DNS is down) for every host each time.
 const RESOLVE_TTL = 3600;        // successful lookup
@@ -336,7 +334,9 @@ function server_addresses(cfg) {
 	if (server_addr_cache && now - server_addr_cache_time < LOCAL_ADDR_REFRESH_INTERVAL)
 		return server_addr_cache;
 
-	let hosts = [ ...ntp_servers ];
+	// Only whitelist the crowdblock server itself, not hardcoded NTP servers.
+	// NTP servers are handled by the system's NTP client, not crowdblock.
+	let hosts = [];
 	let m = match(trim(cfg?.server ?? ''), /^https?:\/\/(\[([0-9a-fA-F:]+)\]|[^\/?#:]+)/);
 	if (m)
 		push(hosts, m[2] ?? m[1]);
