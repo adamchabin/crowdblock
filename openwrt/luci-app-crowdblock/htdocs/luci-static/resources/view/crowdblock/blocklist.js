@@ -162,13 +162,6 @@ return view.extend({
 		const state = data[0], blocked = data[1], paused = data[2];
 		const now = Date.now() / 1000;
 
-		// Records that expired since the last sync are only purged by the next one.
-		const ips = Object.keys(blocked).filter(function(ip) { return blocked[ip].expires > now; });
-		ips.sort(L.naturalCompare);
-
-		const active = ips.filter(function(ip) { return paused.indexOf(ip) < 0; });
-		const v6 = active.filter(function(ip) { return ip.indexOf(':') >= 0; }).length;
-
 		this.status_rows.last_sync.textContent = format_time(state.last_sync);
 		this.status_rows.last_ok_sync.textContent = format_time(state.last_success_sync);
 		this.status_rows.last_error.textContent = state.last_error || '-';
@@ -176,6 +169,21 @@ return view.extend({
 		this.status_rows.list_size.textContent = (state.list_size != null) ? String(state.list_size) : '-';
 		this.status_rows.uptime.textContent = state.daemon_start != null ? String(Math.floor(now - state.daemon_start)) + ' s' : '-';
 		this.status_rows.version.textContent = state.version || '-';
+
+		// The list is read only when shown: without it the counts are unknown.
+		if (!blocked) {
+			this.status_rows.blocked.textContent = '-';
+			this.current = null;
+			return;
+		}
+
+		// Records that expired since the last sync are only purged by the next one.
+		const ips = Object.keys(blocked).filter(function(ip) { return blocked[ip].expires > now; });
+		ips.sort(L.naturalCompare);
+
+		const active = ips.filter(function(ip) { return paused.indexOf(ip) < 0; });
+		const v6 = active.filter(function(ip) { return ip.indexOf(':') >= 0; }).length;
+
 		this.status_rows.blocked.textContent = _('%d IPv4, %d IPv6, %d paused').format(
 			active.length - v6, v6, ips.length - active.length);
 
@@ -223,16 +231,28 @@ return view.extend({
 	// blocked.json can be large, so it is read only when asked for (on start
 	// and after a sync). The poll re-reads the small files and keeps the list.
 	refresh: function(reread_blocked) {
+		// blocked.json can be large: it is read only while the list is shown,
+		// and then only on demand (on show, after a sync) instead of every poll.
+		const want = this.show_list === true;
 		const reread = reread_blocked === true || !this.blocked_cache;
 
 		return Promise.all([
 			load_state(),
-			reread ? load_blocked() : this.blocked_cache,
+			want ? (reread ? load_blocked() : this.blocked_cache) : null,
 			load_paused(),
 		]).then(L.bind(function(data) {
-			this.blocked_cache = data[1];
+			if (want)
+				this.blocked_cache = data[1];
 			this.update(data);
 		}, this));
+	},
+
+	handleToggleList: function() {
+		this.show_list = !this.show_list;
+		this.list_box.style.display = this.show_list ? '' : 'none';
+		this.toggle_button.textContent = this.show_list ? _('Hide list') : _('Show list');
+
+		return this.refresh(true);
 	},
 
 	handlePause: function(ip, pause) {
@@ -284,6 +304,8 @@ return view.extend({
 
 		this.filter = '';
 		this.current = null;
+		this.show_list = false;
+		this.blocked_cache = null;
 		this.match_count = E('span');
 
 		this.status_rows = {
@@ -308,6 +330,34 @@ return view.extend({
 			])
 		]);
 
+		this.toggle_button = E('button', {
+			'class': 'cbi-button cbi-button-neutral',
+			'click': ui.createHandlerFn(this, 'handleToggleList'),
+		}, _('Show list'));
+
+		this.list_box = E('div', { 'style': 'display:none' }, [
+			E('div', { 'style': 'display:flex; flex-wrap:wrap; gap:.5em 1em; align-items:center; margin:1em 0' }, [
+				E('input', {
+					'type': 'search',
+					'class': 'cbi-input-text',
+					'placeholder': _('IP address, country code or source'),
+					'input': L.bind(function(ev) {
+						this.filter = ev.target.value.trim();
+						this.renderTable();
+					}, this),
+				}),
+				this.match_count,
+			]),
+
+			this.table,
+
+			// Required by the CC BY 4.0 license of the server's GeoIP database.
+			E('div', { 'class': 'cbi-section-descr' }, [
+				_('Country data: '),
+				E('a', { 'href': 'https://db-ip.com', 'target': '_blank', 'rel': 'noreferrer' }, 'IP Geolocation by DB-IP'),
+			]),
+		]);
+
 		const view = E([], [
 			E('h2', _('Blocked addresses')),
 			E('div', { 'class': 'cbi-map-descr' },
@@ -324,16 +374,7 @@ return view.extend({
 			]),
 
 			E('div', { 'style': 'display:flex; flex-wrap:wrap; gap:.5em 1em; align-items:center; margin:1em 0' }, [
-				E('input', {
-					'type': 'search',
-					'class': 'cbi-input-text',
-					'placeholder': _('IP address, country code or source'),
-					'input': L.bind(function(ev) {
-						this.filter = ev.target.value.trim();
-						this.renderTable();
-					}, this),
-				}),
-				this.match_count,
+				this.toggle_button,
 				E('button', {
 					'class': 'cbi-button cbi-button-action',
 					'style': 'margin-left:auto',
@@ -343,13 +384,7 @@ return view.extend({
 				}, _('Sync now')),
 			]),
 
-			this.table,
-
-			// Required by the CC BY 4.0 license of the server's GeoIP database.
-			E('div', { 'class': 'cbi-section-descr' }, [
-				_('Country data: '),
-				E('a', { 'href': 'https://db-ip.com', 'target': '_blank', 'rel': 'noreferrer' }, 'IP Geolocation by DB-IP'),
-			]),
+			this.list_box,
 		]);
 
 		// Not awaited: the page is shown now, the list fills in when it is read.
