@@ -263,10 +263,16 @@ function load_map() {
 }
 
 // nftables must be refreshed when its table is new, the elements were never
-// added, or half of block_time has passed since the last refresh.
-function nft_refresh_due(cfg, table_new) {
-	return table_new || sync_state.nft_loaded_at == null ||
-		time() - sync_state.nft_loaded_at >= int(cfg.block_time / 2);
+// added, or half of block_time has passed since the last refresh. Returns why
+// as text, or null when no refresh is due.
+function nft_refresh_reason(cfg, table_new) {
+	if (table_new)
+		return 'table recreated';
+	if (sync_state.nft_loaded_at == null)
+		return 'first load';
+	if (time() - sync_state.nft_loaded_at >= int(cfg.block_time / 2))
+		return 'half of block_time passed';
+	return null;
 }
 
 // Downloads the list (a delta when the server can send one) and loads every
@@ -290,7 +296,8 @@ function sync(cfg) {
 
 	let now = time();
 	let expiry = now + cfg.block_time;
-	let due = nft_refresh_due(cfg, table_new);
+	let due_reason = nft_refresh_reason(cfg, table_new);
+	let due = due_reason != null;
 
 	// Unchanged list and nftables still fresh: the map is not needed at all.
 	if (res.not_modified && !due) {
@@ -418,6 +425,11 @@ function sync(cfg) {
 		write_blocked();
 
 	let how = !changed ? ' (list not modified)' : res.delta ? ' (delta)' : '';
+
+	// Say why nftables got a full reload, not only that it did.
+	if (refresh_due && refresh_full)
+		how += sprintf(' [nft full reload: %s]', table_new ? 'table recreated' : (due_reason ?? (res.delta ? 'delta failed' : 'full list')));
+
 	info('sync ok%s: %d blocked (%d below min_reports, %d invalid%s, etag %s)',
 		how, count, stats.below, stats.invalid,
 		stats.over ? sprintf(', %d dropped: max_entries reached', stats.over) : '',
