@@ -40,6 +40,7 @@ define Package/crowdblock/install
 
 	$(INSTALL_DIR) $(1)/usr/share/ucode/crowdblock
 	$(INSTALL_DATA) ./files/lib/*.uc $(1)/usr/share/ucode/crowdblock/
+	sed -i "s/^export const VERSION = .*/export const VERSION = '$(PKG_VERSION)-r$(PKG_RELEASE)';/" $(1)/usr/share/ucode/crowdblock/api.uc
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/crowdblock.init $(1)/etc/init.d/crowdblock

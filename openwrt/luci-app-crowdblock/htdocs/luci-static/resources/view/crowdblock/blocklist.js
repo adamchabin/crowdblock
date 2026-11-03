@@ -8,6 +8,10 @@
 
 const _ = i18n.translate;
 
+// Version of this package. Must equal PKG_VERSION-rPKG_RELEASE in the
+// luci-app-crowdblock Makefile (bump both together).
+const UI_VERSION = '0.1.0-r21';
+
 // Written by the daemon after every sync: status only (last_sync, last_error, ...).
 const STATE_FILE = '/tmp/crowdblock/state.json';
 
@@ -168,7 +172,9 @@ return view.extend({
 		this.status_rows.failures.textContent = String(state.failures || 0);
 		this.status_rows.list_size.textContent = (state.list_size != null) ? String(state.list_size) : '-';
 		this.status_rows.uptime.textContent = state.daemon_start != null ? String(Math.floor(now - state.daemon_start)) + ' s' : '-';
-		this.status_rows.version.textContent = state.version || '-';
+		// The daemon's version. A different one means the packages are out of step.
+		this.status_rows.version.textContent = state.version ?
+			state.version + (state.version !== UI_VERSION ? ' (' + _('differs from UI version') + ')' : '') : '-';
 
 		// The list is read only when shown. Without it the counts come from
 		// state.json; the paused count is then the number of paused addresses.
@@ -372,7 +378,8 @@ return view.extend({
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last error')), this.status_rows.last_error ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Failed syncs in a row')), this.status_rows.failures ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Uptime')), this.status_rows.uptime ]),
-				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Version')), this.status_rows.version ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Backend version')), this.status_rows.version ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('UI version')), E('td', { 'class': 'td left' }, UI_VERSION) ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Blocked')), this.status_rows.blocked ]),
 			]),
 
