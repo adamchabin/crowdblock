@@ -257,19 +257,6 @@ function sync(cfg) {
 
 	load_saved();
 
-	// The firewall may have flushed the table (`fw4 stop`): recreate it.
-	if (!nft.exists()) {
-		let setup_err = nft.setup(cfg);
-		table_new = true;
-		if (setup_err) {
-			sync_state.failures++;
-			sync_state.last_error = setup_err;
-			write_state();
-			error_log('cannot create nftables table: %s', setup_err);
-			return false;
-		}
-	}
-
 	let res = fetch_list(cfg, sync_state.list_etag);
 	if (res.error) {
 		sync_state.failures++;
@@ -349,6 +336,17 @@ function sync(cfg) {
 			st[ip].expires = expiry;
 
 		let load_err = nft.load(cfg, ips);
+
+		// The firewall may have flushed the table (`fw4 stop`): recreate it and
+		// load again. Checked only when the elements are loaded, so the normal
+		// path runs no extra nft command.
+		if (load_err && nft.is_missing_table(load_err)) {
+			warn_log('nftables table missing (firewall restarted?), recreating it');
+			table_new = true;
+			let setup_err = nft.setup(cfg);
+			load_err = setup_err ?? nft.load(cfg, ips);
+		}
+
 		if (load_err) {
 			sync_state.failures++;
 			sync_state.last_error = load_err;

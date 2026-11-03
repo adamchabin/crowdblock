@@ -91,11 +91,10 @@ function setup(cfg) {
 	return run_batch(join('\n', lines) + '\n', cfg);
 }
 
-// Checks if the nftables table exists. Decided by the exit code: the error
-// text of a missing table must not count as "exists". (with_timeout() is not
-// used here, as it would merge stderr into the output.)
-function exists() {
-	return system(`timeout -s KILL 10 nft list table ${TABLE} >/dev/null 2>&1`) == 0;
+// True if an error from load() means the table (or its sets) is missing,
+// e.g. after `fw4 stop` flushed all tables. Callers recreate it with setup().
+function is_missing_table(err) {
+	return match(err ?? '', /No such file or directory/) != null;
 }
 
 // Removes the entire nftables table (unblocks everything).
@@ -122,4 +121,4 @@ function load(cfg, ips) {
 	return run_batch(join('\n', lines) + '\n', cfg);
 }
 
-export { setup, exists, teardown, load };
+export { setup, is_missing_table, teardown, load };
