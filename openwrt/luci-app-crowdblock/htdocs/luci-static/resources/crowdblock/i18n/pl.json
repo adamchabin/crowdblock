@@ -43,6 +43,7 @@
 	"Last error": "Ostatni błąd",
 	"Last successful sync": "Ostatnia udana synchronizacja",
 	"Last sync": "Ostatnia synchronizacja",
+	"Next sync": "Następna synchronizacja",
 	"Maximum entries": "Maksymalna liczba wpisów",
 	"Maximum number of blocked IP addresses stored in nftables on this router. Protects RAM on small devices. If the server returns more addresses, only this many will be kept. Default: 20000.": "Maksymalna liczba zablokowanych adresów IP przechowywanych w nftables na tym routerze. Chroni pamięć RAM na małych urządzeniach. Jeśli serwer zwróci więcej adresów, zostanie zachowanych tylko tyle, ile wynosi ten limit. Domyślnie: 20000.",
 	"Max addresses per sync": "Maksymalna liczba adresów na sync",

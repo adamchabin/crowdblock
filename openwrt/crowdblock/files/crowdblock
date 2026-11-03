@@ -25,6 +25,8 @@ sync_state.last_error = null;
 sync_state.last_success_sync = null;
 sync_state.blocked = {};
 sync_state.list_etag = null;
+sync_state.last_sync = null;  // end of the last sync attempt
+sync_state.next_sync = null;  // when the daemon's timer fires next
 sync_state.nft_loaded_at = null;  // when the elements were last added to nftables
 sync_state.list_size = 0;
 
@@ -62,7 +64,8 @@ function write_state() {
 		failures: sync_state.failures,
 		last_error: sync_state.last_error,
 		last_success_sync: sync_state.last_success_sync,
-		last_sync: time(),
+		last_sync: sync_state.last_sync,
+		next_sync: sync_state.next_sync,
 		list_size: sync_state.list_size,
 		list_etag: sync_state.list_etag,
 		nft_loaded_at: sync_state.nft_loaded_at,
@@ -379,6 +382,14 @@ function sync(cfg) {
 	return true;
 }
 
+// Records when the last sync attempt ended and when the next one is due, so
+// the UI can show both. Called after every attempt, success or not.
+function record_sync(next) {
+	sync_state.last_sync = time();
+	sync_state.next_sync = next;
+	write_state();
+}
+
 function cmd_run(cfg) {
 	info('crowdblock %s started: server=%s min_reports=%d block_time=%ds interval=%ds',
 		VERSION, cfg.server, cfg.min_reports, cfg.block_time, cfg.sync_interval);
@@ -389,13 +400,16 @@ function cmd_run(cfg) {
 	timer = uloop.timer(1000, function() {
 		sync(cfg);
 		timer.set(cfg.sync_interval * 1000);
+		record_sync(time() + cfg.sync_interval);
 	});
 
 	uloop.run();
 }
 
 function cmd_sync(cfg) {
-	exit(sync(cfg) ? 0 : 1);
+	let ok = sync(cfg);
+	record_sync(null);
+	exit(ok ? 0 : 1);
 }
 
 function usage() {

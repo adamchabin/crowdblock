@@ -10,7 +10,7 @@ const _ = i18n.translate;
 
 // Version of this package. Must equal PKG_VERSION-rPKG_RELEASE in the
 // luci-app-crowdblock Makefile (bump both together).
-const UI_VERSION = '0.1.0-r24';
+const UI_VERSION = '0.1.0-r25';
 
 // Written by the daemon after every sync: status only (last_sync, last_error, ...).
 const STATE_FILE = '/tmp/crowdblock/state.json';
@@ -167,6 +167,7 @@ return view.extend({
 		const now = Date.now() / 1000;
 
 		this.status_rows.last_sync.textContent = format_time(state.last_sync);
+		this.status_rows.next_sync.textContent = state.next_sync ? format_time(state.next_sync) : '-';
 		this.status_rows.last_ok_sync.textContent = format_time(state.last_success_sync);
 		this.status_rows.last_error.textContent = state.last_error || '-';
 		this.status_rows.failures.textContent = String(state.failures || 0);
@@ -319,6 +320,7 @@ return view.extend({
 
 		this.status_rows = {
 			last_sync: E('td', { 'class': 'td left' }),
+			next_sync: E('td', { 'class': 'td left' }),
 			last_ok_sync: E('td', { 'class': 'td left' }),
 			last_error: E('td', { 'class': 'td left' }),
 			failures: E('td', { 'class': 'td left' }),
@@ -374,6 +376,7 @@ return view.extend({
 
 			E('table', { 'class': 'table' }, [
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left', 'width': '33%' }, _('Last sync')), this.status_rows.last_sync ]),
+				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Next sync')), this.status_rows.next_sync ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last successful sync')), this.status_rows.last_ok_sync ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last error')), this.status_rows.last_error ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Failed syncs in a row')), this.status_rows.failures ]),
