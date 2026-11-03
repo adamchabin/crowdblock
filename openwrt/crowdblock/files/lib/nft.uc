@@ -72,9 +72,10 @@ function hook_chain(name, hook) {
 		'	}\n';
 }
 
-function add_elements(lines, set, elems) {
+// Appends `verb element` lines (add or delete) for `elems`, CHUNK per line.
+function element_lines(lines, verb, set, elems) {
 	for (let i = 0; i < length(elems); i += CHUNK)
-		push(lines, 'add element ' + TABLE + ' ' + set + ' { ' + join(', ', slice(elems, i, i + CHUNK)) + ' }');
+		push(lines, verb + ' element ' + TABLE + ' ' + set + ' { ' + join(', ', slice(elems, i, i + CHUNK)) + ' }');
 }
 
 // Creates the nftables table, sets, and chains.
@@ -115,10 +116,32 @@ function load(cfg, ips) {
 		push(index(ip, ':') >= 0 ? v6 : v4, ip + ' timeout ' + cfg.block_time + 's');
 
 	let lines = [ 'flush set ' + TABLE + ' v4', 'flush set ' + TABLE + ' v6' ];
-	add_elements(lines, 'v4', v4);
-	add_elements(lines, 'v6', v6);
+	element_lines(lines, 'add', 'v4', v4);
+	element_lines(lines, 'add', 'v6', v6);
 
 	return run_batch(join('\n', lines) + '\n', cfg);
 }
 
-export { setup, is_missing_table, teardown, load };
+// Changes the sets in place, without a flush: `del` are addresses to remove,
+// `add` are addresses to add with a fresh timeout (an address that changed and
+// is still listed is both: its timeout is re-armed). Every address in `del`
+// must be in the sets, or nft rejects the whole batch. Returns null or an error.
+function load_changes(cfg, del, add) {
+	let d4 = [], d6 = [], a4 = [], a6 = [];
+	for (let ip in del)
+		push(index(ip, ':') >= 0 ? d6 : d4, ip);
+	for (let ip in add)
+		push(index(ip, ':') >= 0 ? a6 : a4, ip + ' timeout ' + cfg.block_time + 's');
+
+	let lines = [];
+	element_lines(lines, 'delete', 'v4', d4);
+	element_lines(lines, 'delete', 'v6', d6);
+	element_lines(lines, 'add', 'v4', a4);
+	element_lines(lines, 'add', 'v6', a6);
+	if (!length(lines))
+		return null;
+
+	return run_batch(join('\n', lines) + '\n', cfg);
+}
+
+export { setup, is_missing_table, teardown, load, load_changes };

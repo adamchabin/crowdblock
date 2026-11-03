@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import * as uloop from 'uloop';
 
 import { load as load_config } from 'crowdblock.config';
-import { debug, info, error_log, ms_since } from 'crowdblock.logging';
+import { debug, info, warn_log, error_log } from 'crowdblock.logging';
 import { fetch_list, each_entry, set_hash, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
 
@@ -135,31 +135,45 @@ function load_full(cfg, expiry, stats) {
 	return null;
 }
 
+// Records an address before the delta changes it: changes[ip] is whether it
+// was in the map (and so in nftables) before this sync. Only the first call
+// per address counts, so an address changed twice is listed once.
+function note_change(changes, st, ip) {
+	if (!exists(changes, ip))
+		changes[ip] = exists(st, ip);
+}
+
 // Applies a delta to sync_state.blocked and checks the result against the
-// server's count and set hash. Returns null if it matches, else an error: the
-// caller then fetches the full list.
-function apply_delta(cfg, d) {
+// server's count and set hash. Every touched address is recorded in `changes`
+// (see note_change). Returns null if it matches, else an error: the caller
+// then fetches the full list.
+function apply_delta(cfg, d, changes, expiry) {
 	let st = sync_state.blocked;
 	let c = { n: length(keys(st)) };
 
 	for (let ip in d.remove) {
 		let bytes = (type(ip) == 'string') ? iptoarr(ip) : null;
-		if (bytes && exists(st, arrtoip(bytes))) {
+		if (!bytes)
+			continue;
+
+		note_change(changes, st, arrtoip(bytes));
+		if (exists(st, arrtoip(bytes))) {
 			delete st[arrtoip(bytes)];
 			c.n--;
 		}
 	}
 
 	for (let e in d.upsert) {
-		let why = store_entry(cfg, st, c, e, 0);
+		let ip = entry_ip(e);
+		if (ip)
+			note_change(changes, st, ip);
+
+		let why = store_entry(cfg, st, c, e, expiry);
 
 		// Now below min_reports: the address leaves the list.
-		if (why == 'below') {
-			let ip = entry_ip(e);
-			if (exists(st, ip)) {
-				delete st[ip];
-				c.n--;
-			}
+		if (why == 'below' && ip && exists(st, ip)) {
+			delete st[ip];
+			c.n--;
 		}
 	}
 
@@ -171,6 +185,13 @@ function apply_delta(cfg, d) {
 		return 'delta does not match the server set hash';
 
 	return null;
+}
+
+// Milliseconds since `t0`, a clock(true) reading. ms_since() rounds to whole
+// seconds, too coarse for the phase timings below.
+function elapsed_ms(t0) {
+	let t = clock(true);
+	return (t[0] - t0[0]) * 1000 + (t[1] - t0[1]) / 1000000;
 }
 
 // Counts the blocked addresses (all IPv4 and IPv6) into sync_state, so that
@@ -251,9 +272,10 @@ function nft_refresh_due(cfg, table_new) {
 // Downloads the list (a delta when the server can send one) and loads every
 // blocked address into nftables. Returns true on success.
 function sync(cfg) {
-	let start = time();
+	let start = clock(true);
 	let stats = { total: 0, invalid: 0, below: 0, over: 0 };
 	let table_new = false;
+	let changes = {};  // address -> was it in the map before this sync (see note_change)
 
 	load_saved();
 
@@ -277,7 +299,7 @@ function sync(cfg) {
 		sync_state.last_success_sync = now;
 		write_state();
 		info('sync ok (list not modified): %d blocked, etag %s', sync_state.blocked_count ?? 0, replace(sync_state.list_etag ?? '-', '"', ''));
-		debug(cfg, 'sync: done in %d ms', ms_since(start));
+		debug(cfg, 'sync: done in %d ms', elapsed_ms(start));
 		return true;
 	}
 
@@ -296,7 +318,7 @@ function sync(cfg) {
 	}
 
 	if (res.delta) {
-		let delta_err = apply_delta(cfg, res.delta);
+		let delta_err = apply_delta(cfg, res.delta, changes, expiry);
 		if (delta_err) {
 			warn_log('delta rejected (%s), fetching the full list', delta_err);
 			sync_state.list_etag = null;
@@ -323,13 +345,36 @@ function sync(cfg) {
 		map_loaded = true;
 	}
 
-	// Kernel timeouts of the elements run out after block_time, so they are
-	// re-added at least every half of block_time. Re-adding is needed at once
-	// when the list changed; an unchanged list in between costs no nftables work.
+	// Kernel timeouts of the elements run out after block_time, so every element
+	// is re-added by a full refresh at least every half of block_time. A changed
+	// list in between is applied to the changed addresses only, which costs
+	// time in proportion to the change, not to the whole list.
 	let changed = !res.not_modified;
 	let refresh_due = changed || due;
+	let refresh_full = due || !res.delta;
 
-	if (refresh_due) {
+	if (refresh_due && !refresh_full) {
+		let phase = clock(true);
+		let del = [], add = [];
+		for (let ip in keys(changes)) {
+			if (changes[ip])
+				push(del, ip);
+			if (exists(sync_state.blocked, ip))
+				push(add, ip);
+		}
+
+		let delta_nft_err = nft.load_changes(cfg, del, add);
+		if (delta_nft_err) {
+			warn_log('nft delta update failed (%s), loading the full set', delta_nft_err);
+			refresh_full = true;
+		}
+		else {
+			debug(cfg, 'sync: nft delta of %d removed, %d added in %d ms', length(del), length(add), elapsed_ms(phase));
+		}
+	}
+
+	if (refresh_due && refresh_full) {
+		let phase = clock(true);
 		let st = sync_state.blocked;
 		let ips = keys(st);
 		for (let ip in ips)
@@ -355,6 +400,7 @@ function sync(cfg) {
 			return false;
 		}
 		sync_state.nft_loaded_at = now;
+		debug(cfg, 'sync: full nft load of %d addresses in %d ms', length(ips), elapsed_ms(phase));
 	}
 
 	let count = count_blocked();
@@ -376,7 +422,7 @@ function sync(cfg) {
 		how, count, stats.below, stats.invalid,
 		stats.over ? sprintf(', %d dropped: max_entries reached', stats.over) : '',
 		replace(sync_state.list_etag ?? '-', '"', ''));
-	debug(cfg, 'sync: done in %d ms', ms_since(start));
+	debug(cfg, 'sync: done in %d ms', elapsed_ms(start));
 	return true;
 }
 

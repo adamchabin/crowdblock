@@ -46,11 +46,17 @@ keeps the blocked list in memory and asks the server for changes only
    - are valid IP addresses,
    - have `distinct_reporters >= min_reports` (checked again on the client),
    - fit within `max_entries`.
-4. `nft.load()` builds one nft script: `flush set` for `v4` and `v6`, then
-   `add element` for every address with `timeout <block_time>s`. It runs as a
-   single `nft -f` transaction, so the list is replaced completely or not at all.
-   The script is kept at `/tmp/crowdblock/batch.nft` (RAM) for debugging; the
-   next run overwrites it.
+4. nftables is updated in one of two ways, each as a single `nft -f` transaction
+   (applied completely or not at all). The script is kept at
+   `/tmp/crowdblock/batch.nft` (RAM) for debugging; the next run overwrites it.
+   - Full refresh, `nft.load()`: `flush set` for `v4` and `v6`, then `add element`
+     for every address with `timeout <block_time>s`. Used for a full list, a
+     refresh that is due, a recreated table, and as the fallback below.
+   - Delta refresh, `nft.load_changes()`: only the changed addresses. `delete
+     element` for those that were in the set before the sync, then `add element`
+     for those still listed (an address that changed and stays gets a fresh
+     timeout). The cost follows the size of the change, not of the whole list.
+     A failed batch falls back to the full refresh.
 
 The chains (`input` and `forward`, priority `filter - 10`) drop packets from
 addresses in `v4` and `v6`. They run before fw4.
@@ -63,11 +69,11 @@ interval; there is no backoff.
 
 ## Why the block time works this way
 
-When the list changes (delta or full list), the sets are flushed and refilled,
-so an address that leaves the server list is unblocked at that sync. When the
-list is unchanged (`304`), nftables is left alone until half of `block_time`
-has passed since the last refill (`nft_loaded_at` in `state.json`); then all
-elements are re-added with a fresh timeout. `block_time` is the kernel timeout
+When the list changes, an address that leaves the server list is unblocked at
+that sync: a full list refills the sets, a delta removes its `remove` addresses
+from them. When the list is unchanged (`304`), nftables is left alone until half
+of `block_time` has passed since the last full refill (`nft_loaded_at` in
+`state.json`); then all elements are re-added with a fresh timeout. `block_time` is the kernel timeout
 of each element: if the daemon dies, blocks expire on their own after that
 time. `config.uc` requires `block_time >= 2 * sync_interval`, so a healthy
 daemon refreshes in time.
