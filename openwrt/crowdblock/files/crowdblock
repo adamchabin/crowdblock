@@ -25,6 +25,7 @@ sync_state.last_error = null;
 sync_state.last_success_sync = null;
 sync_state.blocked = {};
 sync_state.list_etag = null;
+sync_state.nft_loaded_at = null;  // when the elements were last added to nftables
 sync_state.list_size = 0;
 
 function fatal(msg) {
@@ -64,6 +65,7 @@ function write_state() {
 		last_sync: time(),
 		list_size: sync_state.list_size,
 		list_etag: sync_state.list_etag,
+		nft_loaded_at: sync_state.nft_loaded_at,
 		version: VERSION,
 	};
 	// json() parses JSON text; %J turns the object into JSON text.
@@ -195,6 +197,7 @@ function load_saved() {
 	if (blocked && type(state?.list_etag) == 'string') {
 		sync_state.blocked = blocked;
 		sync_state.list_etag = state.list_etag;
+		sync_state.nft_loaded_at = (type(state.nft_loaded_at) == 'int') ? state.nft_loaded_at : null;
 	}
 }
 
@@ -203,12 +206,14 @@ function load_saved() {
 function sync(cfg) {
 	let start = time();
 	let stats = { total: 0, invalid: 0, below: 0, over: 0 };
+	let table_new = false;
 
 	load_saved();
 
 	// The firewall may have flushed the table (`fw4 stop`): recreate it.
 	if (!nft.exists()) {
 		let setup_err = nft.setup(cfg);
+		table_new = true;
 		if (setup_err) {
 			sync_state.failures++;
 			sync_state.last_error = setup_err;
@@ -256,36 +261,48 @@ function sync(cfg) {
 		}
 	}
 
-	// Every address is re-added below, so each gets a fresh kernel timeout,
-	// also the ones the delta didn't mention.
-	let st = sync_state.blocked;
-	let ips = keys(st);
-	for (let ip in ips)
-		st[ip].expires = expiry;
+	// Kernel timeouts of the elements run out after block_time, so they are
+	// re-added at least every half of block_time. Re-adding is needed at once
+	// when the list changed or the table is new; an unchanged list in between
+	// costs no nftables work.
+	let now = time();
+	let changed = !res.not_modified;
+	let refresh_due = changed || table_new || sync_state.nft_loaded_at == null ||
+		now - sync_state.nft_loaded_at >= int(cfg.block_time / 2);
 
-	let load_err = nft.load(cfg, ips);
-	if (load_err) {
-		sync_state.failures++;
-		sync_state.last_error = load_err;
-		write_state();
-		error_log('nft update failed: %s', load_err);
-		return false;
+	let count = length(keys(sync_state.blocked));
+	if (refresh_due) {
+		let st = sync_state.blocked;
+		let ips = keys(st);
+		for (let ip in ips)
+			st[ip].expires = expiry;
+
+		let load_err = nft.load(cfg, ips);
+		if (load_err) {
+			sync_state.failures++;
+			sync_state.last_error = load_err;
+			write_state();
+			error_log('nft update failed: %s', load_err);
+			return false;
+		}
+		sync_state.nft_loaded_at = now;
 	}
 
 	// Saved only now: a failed nft update is retried with the same list.
-	if (!res.not_modified) {
+	if (changed) {
 		sync_state.list_etag = res.delta ? res.delta.etag : res.etag;
 		sync_state.list_size = res.delta ? res.delta.count : stats.total;
 	}
 	sync_state.failures = 0;
 	sync_state.last_error = null;
-	sync_state.last_success_sync = time();
+	sync_state.last_success_sync = now;
 	write_state();
-	write_blocked();
+	if (refresh_due)
+		write_blocked();
 
-	let how = res.not_modified ? ' (list not modified)' : res.delta ? ' (delta)' : '';
+	let how = !changed ? ' (list not modified)' : res.delta ? ' (delta)' : '';
 	info('sync ok%s: %d blocked (%d below min_reports, %d invalid%s)',
-		how, length(ips), stats.below, stats.invalid,
+		how, count, stats.below, stats.invalid,
 		stats.over ? sprintf(', %d dropped: max_entries reached', stats.over) : '');
 	debug(cfg, 'sync: done in %d ms', ms_since(start));
 	return true;

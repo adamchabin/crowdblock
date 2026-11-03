@@ -63,11 +63,14 @@ interval; there is no backoff.
 
 ## Why the block time works this way
 
-Each sync flushes and refills the sets, so an address that leaves the server
-list is unblocked at the next sync. `block_time` is only the kernel timeout of
-each element: if the daemon dies, blocks expire on their own after that time.
-`config.uc` requires `block_time >= 2 * sync_interval`, so a healthy daemon
-always refreshes elements before they expire.
+When the list changes (delta or full list), the sets are flushed and refilled,
+so an address that leaves the server list is unblocked at that sync. When the
+list is unchanged (`304`), nftables is left alone until half of `block_time`
+has passed since the last refill (`nft_loaded_at` in `state.json`); then all
+elements are re-added with a fresh timeout. `block_time` is the kernel timeout
+of each element: if the daemon dies, blocks expire on their own after that
+time. `config.uc` requires `block_time >= 2 * sync_interval`, so a healthy
+daemon refreshes in time.
 
 ## Known issues and limits
 

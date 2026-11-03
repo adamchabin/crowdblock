@@ -42,10 +42,6 @@ function load_paused() {
 	});
 }
 
-function load_all() {
-	return Promise.all([ load_state(), load_blocked(), load_paused() ]);
-}
-
 function format_time(epoch) {
 	return epoch ? new Date(epoch * 1000).toLocaleString() : _('never');
 }
@@ -224,8 +220,19 @@ return view.extend({
 		}, this)), E('em', filter ? _('No matching addresses') : _('No blocked addresses')));
 	},
 
-	refresh: function() {
-		return load_all().then(L.bind(this.update, this));
+	// blocked.json can be large, so it is read only when asked for (on start
+	// and after a sync). The poll re-reads the small files and keeps the list.
+	refresh: function(reread_blocked) {
+		const reread = reread_blocked === true || !this.blocked_cache;
+
+		return Promise.all([
+			load_state(),
+			reread ? load_blocked() : this.blocked_cache,
+			load_paused(),
+		]).then(L.bind(function(data) {
+			this.blocked_cache = data[1];
+			this.update(data);
+		}, this));
 	},
 
 	handlePause: function(ip, pause) {
@@ -251,11 +258,12 @@ return view.extend({
 				ui.addNotification(null, E('p', _('Sync started in background.')), 'info');
 
 			var timer = setInterval(function() {
-				self.refresh().then(function() {
+				self.refresh(false).then(function() {
 					var cur_sync = self.status_rows.last_sync.textContent;
 					var cur_error = self.status_rows.last_error.textContent;
 					if (cur_sync !== prev_sync || cur_error !== prev_error) {
 						clearInterval(timer);
+						self.refresh(true);
 						if (cur_error !== '-')
 							ui.addNotification(null, E('p', _('Sync failed: %s').format(cur_error)), 'error');
 						else
@@ -346,9 +354,9 @@ return view.extend({
 		]);
 
 		// Not awaited: the page is shown now, the list fills in when it is read.
-		this.refresh();
+		this.refresh(true);
 
-		poll.add(L.bind(this.refresh, this), 10);
+		poll.add(L.bind(this.refresh, this, false), 10);
 
 		return view;
 	},
