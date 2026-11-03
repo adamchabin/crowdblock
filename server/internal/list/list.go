@@ -65,6 +65,7 @@ type Meta struct {
 	Kind     string // "full", "diff" or "not-modified"
 	Encoding string // "gzip" or "plain"
 	Records  int    // number of IP records sent
+	ETag     string // ETag of the list the client now has
 }
 
 // listPayload is one precomputed list.
@@ -365,7 +366,7 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 	// Clients may keep the list but must ask whether it changed.
 	h.Set("Cache-Control", "no-cache")
 
-	meta := Meta{Kind: "full", Encoding: "plain"}
+	meta := Meta{Kind: "full", Encoding: "plain", ETag: etag}
 	if gzipped {
 		meta.Encoding = "gzip"
 	}

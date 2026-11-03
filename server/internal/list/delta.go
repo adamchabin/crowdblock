@@ -278,6 +278,7 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 		Kind:     "diff",
 		Encoding: map[bool]string{true: "gzip", false: "plain"}[gzipped],
 		Records:  bytes.Count(body, []byte(`"ip":`)),
+		ETag:     current,
 	}, true
 }
 
