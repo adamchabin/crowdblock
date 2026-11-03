@@ -170,9 +170,12 @@ return view.extend({
 		this.status_rows.uptime.textContent = state.daemon_start != null ? String(Math.floor(now - state.daemon_start)) + ' s' : '-';
 		this.status_rows.version.textContent = state.version || '-';
 
-		// The list is read only when shown: without it the counts are unknown.
+		// The list is read only when shown. Without it the counts come from
+		// state.json; the paused count is then the number of paused addresses.
 		if (!blocked) {
-			this.status_rows.blocked.textContent = '-';
+			const total = state.blocked_count, v6 = state.blocked_v6 || 0;
+			this.status_rows.blocked.textContent = (total != null) ?
+				_('%d IPv4, %d IPv6, %d paused').format(total - v6, v6, paused.length) : '-';
 			this.current = null;
 			return;
 		}

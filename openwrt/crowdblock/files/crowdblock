@@ -66,6 +66,8 @@ function write_state() {
 		list_size: sync_state.list_size,
 		list_etag: sync_state.list_etag,
 		nft_loaded_at: sync_state.nft_loaded_at,
+		blocked_count: sync_state.blocked_count,
+		blocked_v6: sync_state.blocked_v6,
 		version: VERSION,
 	};
 	// json() parses JSON text; %J turns the object into JSON text.
@@ -168,6 +170,21 @@ function apply_delta(cfg, d) {
 	return null;
 }
 
+// Counts the blocked addresses (all IPv4 and IPv6) into sync_state, so that
+// state.json can show them without reading the list. Returns the total.
+function count_blocked() {
+	let total = 0, v6 = 0;
+	for (let ip in sync_state.blocked) {
+		total++;
+		if (index(ip, ':') >= 0)
+			v6++;
+	}
+
+	sync_state.blocked_count = total;
+	sync_state.blocked_v6 = v6;
+	return total;
+}
+
 // Reads a JSON object file. Returns null if it is missing or malformed.
 function read_json(path) {
 	let f = fs.open(path, 'r');
@@ -182,23 +199,50 @@ function read_json(path) {
 }
 
 // A separate `crowdblock sync` process starts with no memory of the last
-// sync, so the blocked map and the list etag are read back from the files
-// written by that sync. The etag is trusted only together with the map: if
-// either is missing, the next sync fetches the full list.
+// sync. The etag and the counts come from state.json (small); the blocked map
+// comes from blocked.json (large) and is read only when a delta or an nftables
+// refresh needs it. The etag is trusted only together with that map: if
+// blocked.json is missing, the full list is fetched instead.
 let saved_loaded = false;
+let map_loaded = false;
 
 function load_saved() {
 	if (saved_loaded)
 		return;
 	saved_loaded = true;
 
-	let blocked = read_json(BLOCKED_FILE);
 	let state = read_json(STATE_FILE);
-	if (blocked && type(state?.list_etag) == 'string') {
-		sync_state.blocked = blocked;
+	if (type(state?.list_etag) == 'string') {
 		sync_state.list_etag = state.list_etag;
 		sync_state.nft_loaded_at = (type(state.nft_loaded_at) == 'int') ? state.nft_loaded_at : null;
+		sync_state.blocked_count = state.blocked_count;
+		sync_state.blocked_v6 = state.blocked_v6;
 	}
+}
+
+// Reads the blocked map back from blocked.json. Returns false (and drops the
+// etag, so the next fetch is a full list) if the map is missing.
+function load_map() {
+	if (map_loaded)
+		return true;
+
+	let blocked = read_json(BLOCKED_FILE);
+	if (!blocked) {
+		sync_state.list_etag = null;
+		return false;
+	}
+
+	sync_state.blocked = blocked;
+	count_blocked();
+	map_loaded = true;
+	return true;
+}
+
+// nftables must be refreshed when its table is new, the elements were never
+// added, or half of block_time has passed since the last refresh.
+function nft_refresh_due(cfg, table_new) {
+	return table_new || sync_state.nft_loaded_at == null ||
+		time() - sync_state.nft_loaded_at >= int(cfg.block_time / 2);
 }
 
 // Downloads the list (a delta when the server can send one) and loads every
@@ -232,7 +276,34 @@ function sync(cfg) {
 		return false;
 	}
 
-	let expiry = time() + cfg.block_time;
+	let now = time();
+	let expiry = now + cfg.block_time;
+	let due = nft_refresh_due(cfg, table_new);
+
+	// Unchanged list and nftables still fresh: the map is not needed at all.
+	if (res.not_modified && !due) {
+		sync_state.failures = 0;
+		sync_state.last_error = null;
+		sync_state.last_success_sync = now;
+		write_state();
+		info('sync ok (list not modified): %d blocked', sync_state.blocked_count ?? 0);
+		debug(cfg, 'sync: done in %d ms', ms_since(start));
+		return true;
+	}
+
+	// A delta is applied to the saved map, and a refresh of nftables needs it.
+	if (res.delta || res.not_modified) {
+		if (!load_map()) {
+			res = fetch_list(cfg, null);
+			if (res.error) {
+				sync_state.failures++;
+				sync_state.last_error = res.error;
+				write_state();
+				error_log('sync failed: %s', res.error);
+				return false;
+			}
+		}
+	}
 
 	if (res.delta) {
 		let delta_err = apply_delta(cfg, res.delta);
@@ -259,18 +330,15 @@ function sync(cfg) {
 			error_log('sync failed: %s', parse_err);
 			return false;
 		}
+		map_loaded = true;
 	}
 
 	// Kernel timeouts of the elements run out after block_time, so they are
 	// re-added at least every half of block_time. Re-adding is needed at once
-	// when the list changed or the table is new; an unchanged list in between
-	// costs no nftables work.
-	let now = time();
+	// when the list changed; an unchanged list in between costs no nftables work.
 	let changed = !res.not_modified;
-	let refresh_due = changed || table_new || sync_state.nft_loaded_at == null ||
-		now - sync_state.nft_loaded_at >= int(cfg.block_time / 2);
+	let refresh_due = changed || due;
 
-	let count = length(keys(sync_state.blocked));
 	if (refresh_due) {
 		let st = sync_state.blocked;
 		let ips = keys(st);
@@ -287,6 +355,8 @@ function sync(cfg) {
 		}
 		sync_state.nft_loaded_at = now;
 	}
+
+	let count = count_blocked();
 
 	// Saved only now: a failed nft update is retried with the same list.
 	if (changed) {
