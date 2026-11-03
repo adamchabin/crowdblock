@@ -11,7 +11,7 @@ import * as uloop from 'uloop';
 
 import { load as load_config } from 'crowdblock.config';
 import { debug, info, error_log, ms_since } from 'crowdblock.logging';
-import { fetch_list, each_entry, VERSION } from 'crowdblock.api';
+import { fetch_list, each_entry, set_hash, VERSION } from 'crowdblock.api';
 import * as nft from 'crowdblock.nft';
 
 const TMP_DIR = '/tmp/crowdblock';
@@ -24,6 +24,7 @@ sync_state.failures = 0;
 sync_state.last_error = null;
 sync_state.last_success_sync = null;
 sync_state.blocked = {};
+sync_state.list_etag = null;
 sync_state.list_size = 0;
 
 function fatal(msg) {
@@ -73,11 +74,102 @@ function write_state() {
 	}
 }
 
-// Downloads the full list and replaces the blocklist with it. Returns true
-// on success.
+// Returns the canonical address of a list entry, or null if it is invalid.
+function entry_ip(e) {
+	if (type(e) != 'object' || type(e.ip) != 'string' || !iptoarr(e.ip))
+		return null;
+
+	return arrtoip(iptoarr(e.ip));
+}
+
+// Stores list entry `e` in the blocked map `st`. Returns null when it was
+// stored, else why it was skipped: 'invalid', 'below' or 'over' (max_entries).
+// `c.n` counts the stored addresses, so the limit needs no scan of the map.
+function store_entry(cfg, st, c, e, expiry) {
+	let ip = entry_ip(e);
+	if (!ip)
+		return 'invalid';
+
+	// Don't rely on the server-side filter alone.
+	if (!(e.distinct_reporters >= cfg.min_reports))
+		return 'below';
+
+	if (!exists(st, ip)) {
+		if (c.n >= cfg.max_entries)
+			return 'over';
+		c.n++;
+	}
+
+	st[ip] = {
+		expires: expiry,
+		reports: e.distinct_reporters || 0,
+		country: e.country || '-',
+		sources: e.sources || [],
+	};
+	return null;
+}
+
+// Rebuilds sync_state.blocked from the downloaded full list. Returns null or
+// an error.
+function load_full(cfg, expiry, stats) {
+	let st = {}, c = { n: 0 };
+
+	let err = each_entry(function(e) {
+		stats.total++;
+		let why = store_entry(cfg, st, c, e, expiry);
+		if (why)
+			stats[why] = stats[why] + 1;
+	});
+	if (err)
+		return err;
+
+	sync_state.blocked = st;
+	return null;
+}
+
+// Applies a delta to sync_state.blocked and checks the result against the
+// server's count and set hash. Returns null if it matches, else an error: the
+// caller then fetches the full list.
+function apply_delta(cfg, d) {
+	let st = sync_state.blocked;
+	let c = { n: length(keys(st)) };
+
+	for (let ip in d.remove) {
+		let bytes = (type(ip) == 'string') ? iptoarr(ip) : null;
+		if (bytes && exists(st, arrtoip(bytes))) {
+			delete st[arrtoip(bytes)];
+			c.n--;
+		}
+	}
+
+	for (let e in d.upsert) {
+		let why = store_entry(cfg, st, c, e, 0);
+
+		// Now below min_reports: the address leaves the list.
+		if (why == 'below') {
+			let ip = entry_ip(e);
+			if (exists(st, ip)) {
+				delete st[ip];
+				c.n--;
+			}
+		}
+	}
+
+	let ips = keys(st);
+	if (length(ips) != d.count)
+		return sprintf('delta gives %d addresses, the server has %d', length(ips), d.count);
+
+	if (set_hash(ips) != d.set_hash)
+		return 'delta does not match the server set hash';
+
+	return null;
+}
+
+// Downloads the list (a delta when the server can send one) and loads every
+// blocked address into nftables. Returns true on success.
 function sync(cfg) {
 	let start = time();
-	let total = 0;
+	let stats = { total: 0, invalid: 0, below: 0, over: 0 };
 
 	// The firewall may have flushed the table (`fw4 stop`): recreate it.
 	if (!nft.exists()) {
@@ -91,78 +183,75 @@ function sync(cfg) {
 		}
 	}
 
-	let fetch_err = fetch_list(cfg);
-	if (fetch_err) {
+	let res = fetch_list(cfg, sync_state.list_etag);
+	if (res.error) {
 		sync_state.failures++;
-		sync_state.last_error = fetch_err;
+		sync_state.last_error = res.error;
 		write_state();
-		error_log('sync failed: %s', fetch_err);
+		error_log('sync failed: %s', res.error);
 		return false;
 	}
 
-	let ips = [];
-	let below = 0, invalid = 0, over = 0;
-
-	// The previous list is released before the new one is built.
-	sync_state.blocked = {};
 	let expiry = time() + cfg.block_time;
 
-	let parse_err = each_entry(function(e) {
-		total++;
-		if (type(e) != 'object' || type(e.ip) != 'string' || !iptoarr(e.ip)) {
-			invalid++;
-			return;
+	if (res.delta) {
+		let delta_err = apply_delta(cfg, res.delta);
+		if (delta_err) {
+			warn_log('delta rejected (%s), fetching the full list', delta_err);
+			sync_state.list_etag = null;
+			res = fetch_list(cfg, null);
+			if (res.error) {
+				sync_state.failures++;
+				sync_state.last_error = res.error;
+				write_state();
+				error_log('sync failed: %s', res.error);
+				return false;
+			}
 		}
-
-		let ip = arrtoip(iptoarr(e.ip));
-
-		// Don't rely on the server-side filter alone.
-		if (!(e.distinct_reporters >= cfg.min_reports)) {
-			below++;
-			return;
-		}
-
-		if (length(ips) >= cfg.max_entries) {
-			over++;
-			return;
-		}
-
-		push(ips, ip);
-		sync_state.blocked[ip] = {
-			expires: expiry,
-			reports: e.distinct_reporters || 0,
-			country: e.country || '-',
-			sources: e.sources || [],
-		};
-	});
-	if (parse_err) {
-		sync_state.failures++;
-		sync_state.last_error = parse_err;
-		sync_state.list_size = total;
-		write_state();
-		error_log('sync failed: %s', parse_err);
-		return false;
 	}
+
+	if (!res.not_modified && !res.delta) {
+		let parse_err = load_full(cfg, expiry, stats);
+		if (parse_err) {
+			sync_state.failures++;
+			sync_state.last_error = parse_err;
+			write_state();
+			error_log('sync failed: %s', parse_err);
+			return false;
+		}
+	}
+
+	// Every address is re-added below, so each gets a fresh kernel timeout,
+	// also the ones the delta didn't mention.
+	let st = sync_state.blocked;
+	let ips = keys(st);
+	for (let ip in ips)
+		st[ip].expires = expiry;
 
 	let load_err = nft.load(cfg, ips);
 	if (load_err) {
 		sync_state.failures++;
 		sync_state.last_error = load_err;
-		sync_state.list_size = total;
 		write_state();
 		error_log('nft update failed: %s', load_err);
 		return false;
 	}
 
+	// Saved only now: a failed nft update is retried with the same list.
+	if (!res.not_modified) {
+		sync_state.list_etag = res.delta ? res.delta.etag : res.etag;
+		sync_state.list_size = res.delta ? res.delta.count : stats.total;
+	}
 	sync_state.failures = 0;
 	sync_state.last_error = null;
 	sync_state.last_success_sync = time();
-	sync_state.list_size = total;
 	write_state();
 	write_blocked();
 
-	info('sync ok: %d blocked (%d below min_reports, %d invalid%s)',
-		length(ips), below, invalid, over ? sprintf(', %d dropped: max_entries reached', over) : '');
+	let how = res.not_modified ? ' (list not modified)' : res.delta ? ' (delta)' : '';
+	info('sync ok%s: %d blocked (%d below min_reports, %d invalid%s)',
+		how, length(ips), stats.below, stats.invalid,
+		stats.over ? sprintf(', %d dropped: max_entries reached', stats.over) : '');
 	debug(cfg, 'sync: done in %d ms', ms_since(start));
 	return true;
 }

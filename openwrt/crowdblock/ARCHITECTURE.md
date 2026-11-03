@@ -3,8 +3,9 @@
 Written for: engineers maintaining the crowdblock OpenWrt package.
 
 The client does one thing: download the blocklist from the crowdblock server
-and load it into nftables. There is no whitelist, no state file, no reporting
-and no delta sync.
+and load it into nftables. There is no whitelist, no reporting. The client
+keeps the blocked list in memory and asks the server for changes only
+(delta sync); the full list is fetched when no delta is possible.
 
 ## Files
 
@@ -12,7 +13,7 @@ and no delta sync.
 |--------------------------|----------------------------------------------------------|
 | `files/crowdblock`       | Entry point: commands, sync, daemon loop                 |
 | `files/lib/config.uc`    | Reads and validates `/etc/config/crowdblock`             |
-| `files/lib/api.uc`       | Downloads the full list (`uclient-fetch`), parses it     |
+| `files/lib/api.uc`       | Downloads the list or a delta (`uclient-fetch`), parses it |
 | `files/lib/nft.uc`       | The nftables table, its sets and the atomic list load    |
 | `files/lib/logging.uc`   | `info`, `warn_log`, `error_log`, `debug` (syslog)        |
 | `files/crowdblock.init`  | procd service; calls `teardown` when stopped             |
@@ -30,10 +31,16 @@ and no delta sync.
 
 1. If the table `inet crowdblock` is missing (for example after `fw4 stop`),
    create it with `nft.setup()`.
-2. `api.fetch_list()` downloads the full list (RAM). The file is named by
-   its content: `/tmp/crowdblock/list.gz` if gzipped, else
-   `/tmp/crowdblock/list.json`. The previous list is removed first. Every
-   request is a full list; there is no ETag and no `304`.
+2. `api.fetch_list(cfg, etag)` asks with `If-None-Match` and `delta=1` when it
+   holds a list (etag from the last successful sync). The answer is one of:
+   - `304`: nothing changed, the in-memory map is kept;
+   - a delta `{...}`: `remove` and `upsert` are applied to the map, then the
+     map's count and `set_hash` must equal the server's (`apply_delta()`);
+     on mismatch the full list is fetched instead;
+   - a full list `[...]`: downloaded to `/tmp/crowdblock/list.gz` or
+     `list.json` and loaded into the map (`load_full()`).
+   The etag is saved only after the nftables update succeeded. After a daemon
+   restart there is no etag, so the first sync is a full list.
 3. `api.each_entry()` reads the list line by line while unpacking it. The
    loader keeps only addresses that:
    - are valid IP addresses,
