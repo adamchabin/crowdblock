@@ -73,6 +73,7 @@ type listPayload struct {
 	plain []byte // JSON, as written by writeJSON
 	gz    []byte
 	etag  string
+	count int // addresses in the list, sent as records= in the request log
 }
 
 // listKey returns the Redis key of one list version/kind.
@@ -149,6 +150,7 @@ func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 		plain: plain.Bytes(),
 		gz:    gz.Bytes(),
 		etag:  `"` + hex.EncodeToString(sum[:8]) + `"`,
+		count: len(entries),
 	}, nil
 }
 
@@ -262,6 +264,7 @@ func GenerateLists(ctx context.Context, instance string, interval time.Duration)
 				pipe.Set(ctx, listKey(min, minutes, "json"), p.plain, ttl)
 				pipe.Set(ctx, listKey(min, minutes, "gz"), p.gz, ttl)
 				pipe.Set(ctx, listKey(min, minutes, "etag"), p.etag, ttl)
+				pipe.Set(ctx, listKey(min, minutes, "count"), p.count, ttl)
 
 				old, known := prev[listKey(min, minutes, "json")]
 				if err := storeDeltaData(ctx, pipe, min, minutes, version, p.etag,
@@ -323,7 +326,7 @@ func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 	have := r.Header.Get("If-None-Match")
 	if have == etag {
 		ListNotModified.Add(1)
-		return writeList(w, r, etag, nil, false), true
+		return writeList(w, r, etag, nil, false, 0), true
 	}
 
 	// Delta sync only for clients asking for it: others couldn't parse it.
@@ -345,20 +348,23 @@ func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 		return Meta{}, false
 	}
 
+	records, _ := db.RDB.Get(ctx, listKey(minReporters, minutes, "count")).Int()
+
 	ListFull.Add(1)
-	return writeList(w, r, etag, body, gzipped), true
+	return writeList(w, r, etag, body, gzipped, records), true
 }
 
 // WriteListPayload sends a list computed for this request (no cache).
 func WriteListPayload(w http.ResponseWriter, r *http.Request, p listPayload) Meta {
 	if acceptsGzip(r) {
-		return writeList(w, r, p.etag, p.gz, true)
+		return writeList(w, r, p.etag, p.gz, true, p.count)
 	}
-	return writeList(w, r, p.etag, p.plain, false)
+	return writeList(w, r, p.etag, p.plain, false, p.count)
 }
 
 // writeList sends one version of a list, or 304 if the client has it.
-func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte, gzipped bool) Meta {
+// records is the number of addresses in the body, for the request log.
+func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte, gzipped bool, records int) Meta {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Add("Vary", "Accept-Encoding")
@@ -366,7 +372,7 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 	// Clients may keep the list but must ask whether it changed.
 	h.Set("Cache-Control", "no-cache")
 
-	meta := Meta{Kind: "full", Encoding: "plain", ETag: etag}
+	meta := Meta{Kind: "full", Encoding: "plain", ETag: etag, Records: records}
 	if gzipped {
 		meta.Encoding = "gzip"
 	}
@@ -379,7 +385,6 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 		return meta
 	}
 
-	meta.Records = bytes.Count(body, []byte(`"ip":`))
 	if gzipped {
 		h.Set("Content-Encoding", "gzip")
 	}

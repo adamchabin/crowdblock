@@ -246,16 +246,19 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 
 	// Cached per (start, current) version: many routers share a start
 	// version. An empty value caches the decision to send the full list.
+	var records int
 	body, err := db.RDB.Get(ctx, cacheKey).Bytes()
 	if err != nil {
-		body, err = buildDelta(ctx, minReporters, minutes, from, current, meta, gzipped)
+		body, records, err = buildDelta(ctx, minReporters, minutes, from, current, meta, gzipped)
 		if err != nil {
 			logging.Debugf("delta %d/%d: %d -> %d failed: %v, full list", minReporters, minutes, from, meta.Version, err)
 			return Meta{}, false
 		}
 		_ = db.RDB.Set(ctx, cacheKey, body, 2*listRefreshInterval()).Err()
+		_ = db.RDB.Set(ctx, cacheKey+":records", records, 2*listRefreshInterval()).Err()
 		logging.Debugf("delta %d/%d: %d -> %d built and cached (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
 	} else {
+		records, _ = db.RDB.Get(ctx, cacheKey+":records").Int()
 		logging.Debugf("delta %d/%d: %d -> %d from cache (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
 	}
 	if len(body) == 0 {
@@ -277,7 +280,7 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	return Meta{
 		Kind:     "diff",
 		Encoding: map[bool]string{true: "gzip", false: "plain"}[gzipped],
-		Records:  bytes.Count(body, []byte(`"ip":`)),
+		Records:  records,
 		ETag:     current,
 	}, true
 }
@@ -285,8 +288,9 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 // buildDelta merges the diffs from generation `from` to meta.Version. Returns
 // nil when a diff is missing or the delta isn't worth it (the full list is
 // smaller to apply).
+// It also returns the number of upserted addresses, for the request log.
 func buildDelta(ctx context.Context, minReporters, minutes int, from int64, current string,
-	meta listMeta, gzipped bool) ([]byte, error) {
+	meta listMeta, gzipped bool) ([]byte, int, error) {
 
 	keys := make([]string, 0, meta.Version-from)
 	for v := from + 1; v <= meta.Version; v++ {
@@ -294,7 +298,7 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 	}
 	vals, err := db.RDB.MGet(ctx, keys...).Result()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	diffs := make([]listDiff, len(vals))
@@ -302,7 +306,7 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 		s, ok := v.(string)
 		if !ok || json.Unmarshal([]byte(s), &diffs[i]) != nil {
 			logging.Debugf("delta %d/%d: diff of version %d missing", minReporters, minutes, from+1+int64(i))
-			return nil, nil // history incomplete
+			return nil, 0, nil // history incomplete
 		}
 	}
 
@@ -310,12 +314,16 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 	if meta.Count > 0 && (len(d.Upsert)+len(d.Remove))*maxDeltaFraction > meta.Count {
 		logging.Debugf("delta %d/%d: %d changes for %d addresses, more than 1/%d", minReporters, minutes,
 			len(d.Upsert)+len(d.Remove), meta.Count, maxDeltaFraction)
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	body, err := encodeDelta(current, meta, d)
-	if err != nil || !gzipped {
-		return body, err
+	if err != nil {
+		return nil, 0, err
 	}
-	return gzipBytes(body)
+	if !gzipped {
+		return body, len(d.Upsert), nil
+	}
+	gz, err := gzipBytes(body)
+	return gz, len(d.Upsert), err
 }
