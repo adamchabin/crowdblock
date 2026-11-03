@@ -214,7 +214,7 @@ function load_saved() {
 	let state = read_json(STATE_FILE);
 	if (type(state?.list_etag) == 'string') {
 		sync_state.list_etag = state.list_etag;
-		sync_state.nft_loaded_at = (type(state.nft_loaded_at) == 'int') ? state.nft_loaded_at : null;
+		sync_state.nft_loaded_at = (type(state.nft_loaded_at) in [ 'int', 'double' ]) ? state.nft_loaded_at : null;
 		sync_state.blocked_count = state.blocked_count;
 		sync_state.blocked_v6 = state.blocked_v6;
 	}
