@@ -577,7 +577,7 @@ func HandleListIPs(w http.ResponseWriter, r *http.Request) {
 		if meta, ok := list.ServeCachedList(w, r, minReporters, minutes); ok {
 			addLogNote(r, "list", meta.Kind)
 			addLogNote(r, "enc", meta.Encoding)
-			addLogNote(r, "etag", meta.ETag)
+			addLogNote(r, "etag", strings.Trim(meta.ETag, `"`))
 			setLogRecords(r, meta.Records)
 			addLogNote(r, "from", "cache")
 			addLogNote(r, "tier", fmt.Sprintf("%d/%d", minReporters, minutes))
@@ -607,7 +607,7 @@ func HandleListIPs(w http.ResponseWriter, r *http.Request) {
 	meta := list.WriteListPayload(w, r, p)
 	addLogNote(r, "list", meta.Kind)
 	addLogNote(r, "enc", meta.Encoding)
-	addLogNote(r, "etag", meta.ETag)
+	addLogNote(r, "etag", strings.Trim(meta.ETag, `"`))
 	setLogRecords(r, meta.Records)
 }
 

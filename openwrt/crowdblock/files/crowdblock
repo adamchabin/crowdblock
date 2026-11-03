@@ -286,7 +286,7 @@ function sync(cfg) {
 		sync_state.last_error = null;
 		sync_state.last_success_sync = now;
 		write_state();
-		info('sync ok (list not modified): %d blocked, etag %s', sync_state.blocked_count ?? 0, sync_state.list_etag ?? '-');
+		info('sync ok (list not modified): %d blocked, etag %s', sync_state.blocked_count ?? 0, replace(sync_state.list_etag ?? '-', '"', ''));
 		debug(cfg, 'sync: done in %d ms', ms_since(start));
 		return true;
 	}
@@ -374,7 +374,7 @@ function sync(cfg) {
 	info('sync ok%s: %d blocked (%d below min_reports, %d invalid%s, etag %s)',
 		how, count, stats.below, stats.invalid,
 		stats.over ? sprintf(', %d dropped: max_entries reached', stats.over) : '',
-		sync_state.list_etag ?? '-');
+		replace(sync_state.list_etag ?? '-', '"', ''));
 	debug(cfg, 'sync: done in %d ms', ms_since(start));
 	return true;
 }
