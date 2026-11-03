@@ -1,0 +1,13 @@
+[Unit]
+Description=Crowdblock attack reporter
+Documentation=https://github.com/adamchabin/crowdblock#reporter
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/crowdblock-reporter -config /etc/crowdblock-reporter/config.yaml
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

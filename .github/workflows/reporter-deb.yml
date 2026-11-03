@@ -1,0 +1,107 @@
+# Builds crowdblock-reporter as a .deb package (amd64 + arm64).
+#
+#   - push to any branch: deb artifacts (downloadable from the run)
+#   - tag v*: GitHub Release with the .deb files
+name: reporter-deb
+
+on:
+  push:
+    branches: [main, dev]
+    tags: ['v*']
+    paths:
+      - 'reporter/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/reporter-deb.yml'
+  pull_request:
+    paths:
+      - 'reporter/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/reporter-deb.yml'
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/crowdblock-reporter
+
+concurrency:
+  group: reporter-deb-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./reporter/...
+      - run: go test ./reporter/...
+
+  build:
+    needs: test
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      GOARCH: ${{ matrix.goarch }}
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build .deb
+        run: |
+          cd reporter
+          VERSION="${VERSION#v}" ./build_deb.sh "$GOARCH"
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: crowdblock-reporter-${{ matrix.goarch }}
+          path: reporter/crowdblock-reporter_*.deb
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # GitHub Release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all deb artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: debs
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: debs/*.deb
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          body: |
+            ## crowdblock-reporter
+
+            Debian packages for amd64 and arm64.
+
+            Install:
+
+            ```sh
+            sudo apt install ./crowdblock-reporter_<version>_<arch>.deb
+            sudo systemctl enable --now crowdblock-reporter
+            ```
+
+            Configure `/etc/crowdblock-reporter/config.yaml` before starting.

@@ -1,0 +1,215 @@
+#!/usr/bin/ucode -s
+// crowdblock - crowd-sourced IP blocklist client for OpenWrt
+//
+//   crowdblock run        daemon: download the list and load it, every sync_interval
+//   crowdblock sync       download the list and load it once
+//   crowdblock teardown   remove the nftables table (unblocks everything)
+'use strict';
+
+import * as fs from 'fs';
+import * as uloop from 'uloop';
+
+import { load as load_config } from 'crowdblock.config';
+import { debug, info, error_log, ms_since } from 'crowdblock.logging';
+import { fetch_list, each_entry, VERSION } from 'crowdblock.api';
+import * as nft from 'crowdblock.nft';
+
+const TMP_DIR = '/tmp/crowdblock';
+const STATE_FILE = TMP_DIR + '/state.json';
+const BLOCKED_FILE = TMP_DIR + '/blocked.json';
+
+let sync_state = {};
+sync_state.daemon_start = time();
+sync_state.failures = 0;
+sync_state.last_error = null;
+sync_state.last_success_sync = null;
+sync_state.blocked = {};
+sync_state.list_size = 0;
+
+function fatal(msg) {
+	warn(msg, '\n');
+	exit(1);
+}
+
+// Writes the blocked addresses to BLOCKED_FILE for the UI, separately from
+// state.json. Written to a temporary file first, so the UI never reads a
+// half-written list.
+function write_blocked() {
+	let tmp = BLOCKED_FILE + '.tmp';
+	let f = fs.open(tmp, 'w');
+	if (!f)
+		return;
+
+	// One record at a time: a single JSON string of the whole list would
+	// double the memory use on a large list.
+	let first = true;
+	f.write('{');
+	for (let ip in sync_state.blocked) {
+		f.write((first ? '' : ',') + sprintf('%J:%J', ip, sync_state.blocked[ip]));
+		first = false;
+	}
+	f.write('}');
+	f.close();
+	fs.rename(tmp, BLOCKED_FILE);
+}
+
+// Zapisuje aktualny stan do STATE_FILE dla UI.
+function write_state() {
+	let state = {
+		daemon_start: sync_state.daemon_start,
+		failures: sync_state.failures,
+		last_error: sync_state.last_error,
+		last_success_sync: sync_state.last_success_sync,
+		last_sync: time(),
+		list_size: sync_state.list_size,
+		version: VERSION,
+	};
+	// json() parses JSON text; %J turns the object into JSON text.
+	let state_json = sprintf('%J', state);
+	let f = fs.open(STATE_FILE, 'w');
+	if (f) {
+		f.write(state_json);
+		f.close();
+	}
+}
+
+// Downloads the full list and replaces the blocklist with it. Returns true
+// on success.
+function sync(cfg) {
+	let start = time();
+	let total = 0;
+
+	// The firewall may have flushed the table (`fw4 stop`): recreate it.
+	if (!nft.exists()) {
+		let setup_err = nft.setup(cfg);
+		if (setup_err) {
+			sync_state.failures++;
+			sync_state.last_error = setup_err;
+			write_state();
+			error_log('cannot create nftables table: %s', setup_err);
+			return false;
+		}
+	}
+
+	let fetch_err = fetch_list(cfg);
+	if (fetch_err) {
+		sync_state.failures++;
+		sync_state.last_error = fetch_err;
+		write_state();
+		error_log('sync failed: %s', fetch_err);
+		return false;
+	}
+
+	let ips = [];
+	let below = 0, invalid = 0, over = 0;
+
+	// The previous list is released before the new one is built.
+	sync_state.blocked = {};
+	let expiry = time() + cfg.block_time;
+
+	let parse_err = each_entry(function(e) {
+		total++;
+		if (type(e) != 'object' || type(e.ip) != 'string' || !iptoarr(e.ip)) {
+			invalid++;
+			return;
+		}
+
+		let ip = arrtoip(iptoarr(e.ip));
+
+		// Don't rely on the server-side filter alone.
+		if (!(e.distinct_reporters >= cfg.min_reports)) {
+			below++;
+			return;
+		}
+
+		if (length(ips) >= cfg.max_entries) {
+			over++;
+			return;
+		}
+
+		push(ips, ip);
+		sync_state.blocked[ip] = {
+			expires: expiry,
+			reports: e.distinct_reporters || 0,
+			country: e.country || '-',
+			sources: e.sources || [],
+		};
+	});
+	if (parse_err) {
+		sync_state.failures++;
+		sync_state.last_error = parse_err;
+		sync_state.list_size = total;
+		write_state();
+		error_log('sync failed: %s', parse_err);
+		return false;
+	}
+
+	let load_err = nft.load(cfg, ips);
+	if (load_err) {
+		sync_state.failures++;
+		sync_state.last_error = load_err;
+		sync_state.list_size = total;
+		write_state();
+		error_log('nft update failed: %s', load_err);
+		return false;
+	}
+
+	sync_state.failures = 0;
+	sync_state.last_error = null;
+	sync_state.last_success_sync = time();
+	sync_state.list_size = total;
+	write_state();
+	write_blocked();
+
+	info('sync ok: %d blocked (%d below min_reports, %d invalid%s)',
+		length(ips), below, invalid, over ? sprintf(', %d dropped: max_entries reached', over) : '');
+	debug(cfg, 'sync: done in %d ms', ms_since(start));
+	return true;
+}
+
+function cmd_run(cfg) {
+	info('crowdblock %s started: server=%s min_reports=%d block_time=%ds interval=%ds',
+		VERSION, cfg.server, cfg.min_reports, cfg.block_time, cfg.sync_interval);
+
+	uloop.init();
+
+	let timer;
+	timer = uloop.timer(1000, function() {
+		sync(cfg);
+		timer.set(cfg.sync_interval * 1000);
+	});
+
+	uloop.run();
+}
+
+function cmd_sync(cfg) {
+	exit(sync(cfg) ? 0 : 1);
+}
+
+function usage() {
+	warn('Usage: crowdblock run|sync|teardown\n');
+	exit(1);
+}
+
+fs.mkdir(TMP_DIR, 0o700);
+
+let command = ARGV[0];
+
+if (command == 'teardown') {
+	let err = nft.teardown();
+	if (err)
+		fatal(err);
+}
+else if (command == 'run' || command == 'sync') {
+	let res = load_config();
+	if (res.error)
+		fatal(`config error: ${res.error}`);
+
+	if (command == 'run')
+		cmd_run(res.cfg);
+	else
+		cmd_sync(res.cfg);
+}
+else {
+	usage();
+}

@@ -1,0 +1,156 @@
+name: Build OpenWrt Packages
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - 'openwrt/**'
+      - '.github/workflows/build-openwrt-packages.yml'
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - 'crowdblock/**'
+      - 'luci-app-crowdblock/**'
+      - 'build-crowdblock.sh'
+      - 'build-luci-app-crowdblock.sh'
+      - '.github/workflows/build-openwrt-packages.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      # OpenWrt SDK version and target
+      # Confirmed: https://downloads.openwrt.org/releases/25.12.5/targets/mediatek/filogic/
+      OPENWRT_VERSION: 25.12.5
+      OPENWRT_TARGET: mediatek/filogic
+      OPENWRT_GCC_VERSION: 14.3.0
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Set up dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget tar zstd gcc g++ make ncurses-dev libssl-dev rsync
+
+    - name: Cache OpenWrt SDK
+      uses: actions/cache@v5
+      with:
+        path: openwrt-sdk-*
+        key: ${{ runner.os }}-openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ env.OPENWRT_TARGET }}-gcc${{ env.OPENWRT_GCC_VERSION }}
+        restore-keys: |
+          ${{ runner.os }}-openwrt-sdk-
+
+    - name: Download OpenWrt SDK
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        # OpenWrt SDK filenames replace '/' with '-' in the target
+        TARGET_SLUG="${OPENWRT_TARGET//\//-}"
+        SDK_FILENAME="openwrt-sdk-${OPENWRT_VERSION}-${TARGET_SLUG}_gcc-${OPENWRT_GCC_VERSION}_musl.Linux-x86_64.tar.zst"
+        SDK_URL="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${OPENWRT_TARGET}/${SDK_FILENAME}"
+
+        echo "Downloading OpenWrt SDK from $SDK_URL"
+        HTTP_CODE=$(wget --server-response --spider "$SDK_URL" 2>&1 | grep 'HTTP/' | tail -1 | awk '{print $2}')
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "SDK not found at $SDK_URL (HTTP $HTTP_CODE)"
+          exit 1
+        fi
+        wget --quiet "$SDK_URL" -O sdk.tar.zst
+
+        echo "Extracting SDK..."
+        tar --zstd -xf sdk.tar.zst
+
+    - name: Verify SDK
+      run: |
+        SDK_DIR=$(ls -d openwrt-sdk-* | head -n 1)
+        echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+        echo "SDK_DIR: $SDK_DIR"
+        ls -la "$SDK_DIR"
+        test -x "$SDK_DIR/scripts/feeds"
+
+    - name: Add custom feed for our packages
+      run: |
+        cd "$SDK_DIR"
+        echo "src-link crowdblock ${{ github.workspace }}" >> feeds.conf.default
+
+    - name: Install package dependencies
+      run: |
+        cd "$SDK_DIR"
+        ./scripts/feeds update crowdblock luci
+        ./scripts/feeds install crowdblock luci-app-crowdblock -p crowdblock
+
+    - name: Generate .config (non-interactive)
+      run: |
+        cd "$SDK_DIR"
+        TERM=linux make defconfig
+        # OpenWrt SDK 25.12.5: olddefconfig is broken – kconfig rejects
+        # 'defaults for choice values not supported' in Config-build.in and
+        # PACKAGE_libc/PACKAGE_libgcc type redefinitions. Disable .config
+        # regeneration so package builds can run non-interactively.
+        sed -i 's/^\.config:.*$/.config:/' include/toplevel.mk
+
+    - name: Build crowdblock package
+      env:
+        TERM: linux
+      run: |
+        cd "$SDK_DIR"
+        echo 'CONFIG_PACKAGE_crowdblock=y' >> .config
+        make package/crowdblock/compile V=s
+        find bin/packages -name "crowdblock-[0-9]*.apk" -exec realpath {} \;
+
+    - name: Build luci-app-crowdblock package
+      env:
+        TERM: linux
+      run: |
+        cd "$SDK_DIR"
+        echo 'CONFIG_PACKAGE_luci-app-crowdblock=y' >> .config
+        make package/luci-app-crowdblock/compile V=s
+        find bin/packages -name "luci-app-crowdblock-[0-9]*.apk" -exec realpath {} \;
+
+    - name: Generate package index (Packages.gz)
+      run: |
+        cd "$SDK_DIR"
+        ./scripts/ipkg-make-package.sh bin/packages || true
+        find bin/packages -name "Packages.gz" -exec realpath {} \;
+
+    - name: Set short SHA
+      run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v5
+      with:
+        name: openwrt-packages-${{ env.SHORT_SHA }}
+        path: |
+          ${{ env.SDK_DIR }}/bin/packages/**/*.apk
+          ${{ env.SDK_DIR }}/bin/packages/**/Packages.gz
+        retention-days: 30
+
+    - name: Cleanup SDK
+      if: always()
+      run: |
+        rm -rf openwrt-sdk-* sdk.tar.zst
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Set short SHA
+      run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: openwrt-packages-${{ env.SHORT_SHA }}
+        path: packages
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v3
+      with:
+        files: packages/**/*.apk
+        tag_name: ${{ github.ref_name }}
+        generate_release_notes: true
