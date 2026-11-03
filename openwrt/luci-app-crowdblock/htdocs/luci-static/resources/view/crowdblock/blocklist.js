@@ -318,7 +318,6 @@ return view.extend({
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last successful sync')), this.status_rows.last_ok_sync ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Last error')), this.status_rows.last_error ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Failed syncs in a row')), this.status_rows.failures ]),
-				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Addresses on the server list')), this.status_rows.list_size ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Uptime')), this.status_rows.uptime ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Version')), this.status_rows.version ]),
 				E('tr', { 'class': 'tr' }, [ E('td', { 'class': 'td left' }, _('Blocked')), this.status_rows.blocked ]),

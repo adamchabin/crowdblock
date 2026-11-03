@@ -7,7 +7,6 @@
 	"7 days": "7 dni",
 	"Addresses and networks that are never blocked. Private ranges and the router's own addresses are whitelisted automatically.": "Adresy i sieci, które nigdy nie są blokowane. Zakresy prywatne i własne adresy routera są dodawane automatycznie.",
 	"Addresses downloaded from the server in the last sync. The list refreshes automatically.": "Adresy pobrane z serwera podczas ostatniej synchronizacji. Lista odświeża się automatycznie.",
-	"Addresses on the server list": "Adresy na liście serwera",
 	"Addresses that are always blocked, independently of the server. Added with the configured block_time on every sync.": "Adresy blokowane zawsze, niezależnie od serwera. Dodawane z ustawionym block_time przy każdej synchronizacji.",
 	"Advanced Settings": "Ustawienia zaawansowane",
 	"Also protects port-forwarded LAN services.": "Chroni również usługi w sieci LAN udostępnione przez przekierowanie portów.",
