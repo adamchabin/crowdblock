@@ -63,6 +63,7 @@ function write_state() {
 		last_success_sync: sync_state.last_success_sync,
 		last_sync: time(),
 		list_size: sync_state.list_size,
+		list_etag: sync_state.list_etag,
 		version: VERSION,
 	};
 	// json() parses JSON text; %J turns the object into JSON text.
@@ -165,11 +166,45 @@ function apply_delta(cfg, d) {
 	return null;
 }
 
+// Reads a JSON object file. Returns null if it is missing or malformed.
+function read_json(path) {
+	let f = fs.open(path, 'r');
+	if (!f)
+		return null;
+
+	let data;
+	try { data = json(f.read('all')); } catch (e) { }
+	f.close();
+
+	return (type(data) == 'object') ? data : null;
+}
+
+// A separate `crowdblock sync` process starts with no memory of the last
+// sync, so the blocked map and the list etag are read back from the files
+// written by that sync. The etag is trusted only together with the map: if
+// either is missing, the next sync fetches the full list.
+let saved_loaded = false;
+
+function load_saved() {
+	if (saved_loaded)
+		return;
+	saved_loaded = true;
+
+	let blocked = read_json(BLOCKED_FILE);
+	let state = read_json(STATE_FILE);
+	if (blocked && type(state?.list_etag) == 'string') {
+		sync_state.blocked = blocked;
+		sync_state.list_etag = state.list_etag;
+	}
+}
+
 // Downloads the list (a delta when the server can send one) and loads every
 // blocked address into nftables. Returns true on success.
 function sync(cfg) {
 	let start = time();
 	let stats = { total: 0, invalid: 0, below: 0, over: 0 };
+
+	load_saved();
 
 	// The firewall may have flushed the table (`fw4 stop`): recreate it.
 	if (!nft.exists()) {
