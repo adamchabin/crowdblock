@@ -148,6 +148,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// RateLimitDisabled turns all RateLimit wrappers into no-ops. Set once at
+// startup from RATE_LIMIT_DISABLED=true, for load tests on a test instance
+// only; it must be set before the routes are registered.
+var RateLimitDisabled bool
+
 // RateLimit limits a handler to `limit` requests per remote address per
 // `window`, using a Redis counter (shared across instances, unlike an
 // in-process limiter). Intended for endpoints that need no authentication
@@ -155,6 +160,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // all. On a Redis error the request is let through: availability of the
 // endpoint matters more than the limit when the cache is down.
 func RateLimit(name string, limit int, window time.Duration, next http.Handler) http.Handler {
+	if RateLimitDisabled {
+		return next
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {

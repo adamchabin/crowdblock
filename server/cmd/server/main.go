@@ -53,6 +53,12 @@ func main() {
 	}
 	api.SetConfig(cfg)
 
+	// Test instances only: removes the per-IP rate limits (see api.RateLimit).
+	if os.Getenv("RATE_LIMIT_DISABLED") == "true" {
+		api.RateLimitDisabled = true
+		slog.Warn("rate limits DISABLED (RATE_LIMIT_DISABLED=true): never use this in production")
+	}
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		slog.Error("DATABASE_URL not set")

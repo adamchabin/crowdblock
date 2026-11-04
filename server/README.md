@@ -54,6 +54,7 @@ Tags with a suffix (`v1.3.0-rc1`) become pre-releases and don't move `latest`.
 |---|---|---|
 | `DATABASE_URL` | – | PostgreSQL; the database and schema are created on start |
 | `REDIS_ADDR` | `localhost:6379` | API key cache and report aggregation |
+| `RATE_LIMIT_DISABLED` | – | `true` turns off all per-IP rate limits (e.g. 100 reports/h). Test instances only: load tests need it |
 | `LISTEN_ADDR` | `:8080` | |
 | `SMTP_FROM` | – | sender address of the registration e-mail |
 | `SMTP_HOST` | – | SMTP server, `host` or `host:port` (default port 587, STARTTLS) |
