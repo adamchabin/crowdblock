@@ -10,7 +10,7 @@ const _ = i18n.translate;
 
 // Version of this package. Must equal PKG_VERSION-rPKG_RELEASE in the
 // luci-app-crowdblock Makefile (bump both together).
-const UI_VERSION = '0.1.0-r29';
+const UI_VERSION = '0.1.0-r30';
 
 // Written by the daemon after every sync: status only (last_sync, last_error, ...).
 const STATE_FILE = '/tmp/crowdblock/state.json';
