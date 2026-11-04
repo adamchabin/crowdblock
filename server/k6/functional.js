@@ -65,7 +65,7 @@ export function setup() {
   console.log(`reported ${testIP}`);
 
   // 4. List IPs — may be served from Redis cache which doesn't yet contain
-  //    our just-reported address (list refreshes every LIST_REFRESH, default 1m).
+  //    our just-reported address (list refreshes every LIST_REFRESH, default 5m).
   //    Verify the endpoint returns valid data; if our IP is present, great.
   const list = http.get(`${BASE_URL}/api/v1/ips?min_reporters=1&minutes=60`,
     { headers: { 'X-API-Key': apiKey } });

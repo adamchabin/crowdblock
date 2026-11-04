@@ -37,10 +37,10 @@ import (
 // generation also stores what delta sync needs (see delta.go).
 
 const (
-	defaultListRefresh = time.Minute
+	defaultListRefresh = 5 * time.Minute
 	listLockKey        = "ips:lock"
 	listVersionKey     = "ips:version"
-	listHistory        = 60 // generations kept for deltas (1 h at LIST_REFRESH=1m)
+	listHistory        = 12 // generations kept for deltas (1 h at LIST_REFRESH=5m)
 	maxDeltaFraction   = 2  // a delta larger than count/2 is sent as the full list
 )
 

@@ -56,7 +56,7 @@ function seedReports(users, count) {
     http.batch(batch).forEach((r) => { if (r.status !== 201) fail(`seed report: ${r.status}`); });
   }
 
-  // One entry per line + 2 bracket lines; lists are refreshed every LIST_REFRESH (1 min by default).
+  // One entry per line + 2 bracket lines; lists are refreshed every LIST_REFRESH (5 min by default).
   const deadline = Date.now() + num('SEED_WAIT', 180) * 1000;
   for (;;) {
     const r = http.get(`${BASE_URL}/api/v1/ips?min_reporters=1&minutes=60`,

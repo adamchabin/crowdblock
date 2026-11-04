@@ -115,7 +115,7 @@ func TestEncodeDelta(t *testing.T) {
 		t.Errorf("format:\n%s", body)
 	}
 
-	empty, _ := encodeDelta(`x`,listMeta{}, listDiff{Upsert: []db.IPListEntry{}, Remove: []string{}})
+	empty, _ := encodeDelta(`x`, listMeta{}, listDiff{Upsert: []db.IPListEntry{}, Remove: []string{}})
 	if err := json.Unmarshal(empty, &d); err != nil {
 		t.Errorf("empty delta not valid JSON: %s", empty)
 	}
