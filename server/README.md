@@ -87,8 +87,9 @@ stores each in Redis twice, plain and gzipped, with its ETag
 (`ips:<min_reporters>:<minutes>:{json,gz,etag}`, expiring after 5 rounds).
 Requests get the gzip version with `Accept-Encoding: gzip`, and `304 Not
 Modified` with `If-None-Match`. The ETag is the first 16 hex digits of the
-SHA-256 of the uncompressed body, quoted – clients may compute it themselves
-(the OpenWrt client does), so keep it that way. The list is a JSON array with
+SHA-256 of the uncompressed body, unquoted – clients may compute it themselves
+(the OpenWrt client does). A client may send `If-None-Match` with or without
+quotes. The list is a JSON array with
 one entry per line, so that small clients can parse it line by line.
 
 **Delta sync.** A client sending `If-None-Match` and `?delta=1` gets, instead
@@ -96,7 +97,7 @@ of the full list, the changes since its copy (if that copy is one of the last
 60 generations and the changes are less than half the list):
 
 ```
-{"etag":"\"…\"","count":5000,"set_hash":"0123456789abcdef","remove":["1.2.3.4"],"upsert":[
+{"etag":"…","count":5000,"set_hash":"0123456789abcdef","remove":["1.2.3.4"],"upsert":[
 {"ip":"5.6.7.8","distinct_reporters":3},
 …
 ]}

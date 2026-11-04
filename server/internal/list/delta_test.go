@@ -90,7 +90,7 @@ func TestSetHash(t *testing.T) {
 }
 
 func TestEncodeDelta(t *testing.T) {
-	body, err := encodeDelta(`"abc"`, listMeta{Count: 3, SetHash: "0123456789abcdef"},
+	body, err := encodeDelta(`abc`, listMeta{Count: 3, SetHash: "0123456789abcdef"},
 		listDiff{Upsert: []db.IPListEntry{e("1.1.1.1", 2), e("2.2.2.2", 1, "auth")}, Remove: []string{"3.3.3.3"}})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestEncodeDelta(t *testing.T) {
 	if err := json.Unmarshal(body, &d); err != nil {
 		t.Fatalf("not valid JSON: %v\n%s", err, body)
 	}
-	if d.ETag != `"abc"` || d.Count != 3 || len(d.Upsert) != 2 || d.Remove[0] != "3.3.3.3" {
+	if d.ETag != `abc` || d.Count != 3 || len(d.Upsert) != 2 || d.Remove[0] != "3.3.3.3" {
 		t.Errorf("decoded %+v", d)
 	}
 	// Starts with "{" (the client tells a delta from a full list by it) and
@@ -115,7 +115,7 @@ func TestEncodeDelta(t *testing.T) {
 		t.Errorf("format:\n%s", body)
 	}
 
-	empty, _ := encodeDelta(`"x"`, listMeta{}, listDiff{Upsert: []db.IPListEntry{}, Remove: []string{}})
+	empty, _ := encodeDelta(`x`,listMeta{}, listDiff{Upsert: []db.IPListEntry{}, Remove: []string{}})
 	if err := json.Unmarshal(empty, &d); err != nil {
 		t.Errorf("empty delta not valid JSON: %s", empty)
 	}

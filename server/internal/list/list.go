@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -145,11 +146,12 @@ func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 
 	// Part of the API contract: clients compute the same value from the
 	// unpacked body (the OpenWrt client with sha256sum) to send If-None-Match.
+	// Unquoted: the value is sent in the ETag header as is.
 	sum := sha256.Sum256(plain.Bytes())
 	return listPayload{
 		plain: plain.Bytes(),
 		gz:    gz.Bytes(),
-		etag:  `"` + hex.EncodeToString(sum[:8]) + `"`,
+		etag:  hex.EncodeToString(sum[:8]),
 		count: len(entries),
 	}, nil
 }
@@ -310,11 +312,19 @@ func previousLists(ctx context.Context) (map[string][]db.IPListEntry, error) {
 	return prev, nil
 }
 
+// ifNoneMatch returns the ETag the client sent, without surrounding quotes.
+// The ETag is sent unquoted, but a client may echo it back quoted.
+func ifNoneMatch(r *http.Request) string {
+	return strings.Trim(strings.TrimSpace(r.Header.Get("If-None-Match")), `"`)
+}
+
 // ServeCachedList writes the precomputed list and returns what it served, or
 // returns ok=false (nothing written) when the list is not in Redis.
 func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minutes int) (Meta, bool) {
 	ctx := r.Context()
+	have := ifNoneMatch(r)
 
+	// Cheap check first: only the ETag, no body. A single GET is atomic.
 	// On a Redis error just fall back: the generator already logs it, once.
 	etag, err := db.RDB.Get(ctx, listKey(minReporters, minutes, "etag")).Result()
 	if err != nil {
@@ -322,8 +332,6 @@ func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 		ListMiss.Add(1)
 		return Meta{}, false
 	}
-
-	have := r.Header.Get("If-None-Match")
 	if have == etag {
 		ListNotModified.Add(1)
 		return writeList(w, r, etag, nil, false, 0), true
@@ -331,7 +339,7 @@ func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 
 	// Delta sync only for clients asking for it: others couldn't parse it.
 	if have != "" && r.URL.Query().Get("delta") == "1" {
-		if meta, ok := serveDelta(w, r, minReporters, minutes, have, etag); ok {
+		if meta, ok := serveDelta(w, r, minReporters, minutes, have); ok {
 			ListDelta.Add(1)
 			return meta, true
 		}
@@ -342,16 +350,37 @@ func ServeCachedList(w http.ResponseWriter, r *http.Request, minReporters, minut
 	if gzipped {
 		kind = "gz"
 	}
-	body, err := db.RDB.Get(ctx, listKey(minReporters, minutes, kind)).Bytes()
+
+	// ETag, body and count in one MGET. Redis runs MGET atomically and the
+	// generator writes all of them in one transaction, so they always come
+	// from the same generation. Separate GETs could mix two generations.
+	vals, err := db.RDB.MGet(ctx,
+		listKey(minReporters, minutes, "etag"),
+		listKey(minReporters, minutes, kind),
+		listKey(minReporters, minutes, "count"),
+	).Result()
 	if err != nil {
 		ListMiss.Add(1)
 		return Meta{}, false
 	}
+	etag, okEtag := vals[0].(string)
+	body, okBody := vals[1].(string)
+	if !okEtag || !okBody {
+		ListMiss.Add(1)
+		return Meta{}, false
+	}
+	records := 0
+	if s, ok := vals[2].(string); ok {
+		records, _ = strconv.Atoi(s)
+	}
 
-	records, _ := db.RDB.Get(ctx, listKey(minReporters, minutes, "count")).Int()
+	if have == etag {
+		ListNotModified.Add(1)
+		return writeList(w, r, etag, nil, false, 0), true
+	}
 
 	ListFull.Add(1)
-	return writeList(w, r, etag, body, gzipped, records), true
+	return writeList(w, r, etag, []byte(body), gzipped, records), true
 }
 
 // WriteListPayload sends a list computed for this request (no cache).
@@ -378,7 +407,7 @@ func writeList(w http.ResponseWriter, r *http.Request, etag string, body []byte,
 	}
 
 	// The client's copy is current: 304 and no body at all.
-	if r.Header.Get("If-None-Match") == etag {
+	if ifNoneMatch(r) == etag {
 		meta.Kind = "not-modified"
 		meta.Records = 0
 		w.WriteHeader(http.StatusNotModified)

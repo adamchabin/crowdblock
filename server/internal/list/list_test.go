@@ -49,7 +49,7 @@ func TestBuildLists(t *testing.T) {
 			t.Errorf("min %d: gzip version differs from plain", min)
 		}
 
-		if len(p.etag) != 18 || p.etag[0] != '"' {
+		if len(p.etag) != 16 {
 			t.Errorf("min %d: etag %q", min, p.etag)
 		}
 	}

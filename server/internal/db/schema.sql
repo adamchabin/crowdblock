@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix) WHERE revoked_at IS NULL;
+-- lists a user's keys and counts active keys; also speeds up the cascade from users
+CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
 -- limit of 10 active keys per user is enforced in application code (transaction + COUNT)
 
 CREATE TABLE IF NOT EXISTS ip_reports (
@@ -35,6 +37,10 @@ CREATE INDEX IF NOT EXISTS idx_ip_reports_ip_time ON ip_reports(ip, reported_at)
 
 -- statistics (UI) count reports by time alone
 CREATE INDEX IF NOT EXISTS idx_ip_reports_time ON ip_reports(reported_at);
+
+-- per-user and per-key report counts; also speeds up the cascade on user/key delete
+CREATE INDEX IF NOT EXISTS idx_ip_reports_user ON ip_reports(user_id);
+CREATE INDEX IF NOT EXISTS idx_ip_reports_api_key ON ip_reports(api_key_id);
 
 -- what detected the attack, e.g. 'auth' or 'fail2ban' (reporter plugin name);
 -- NULL for reports sent without it

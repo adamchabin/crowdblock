@@ -261,7 +261,7 @@ func TestIntegration_ListTierIsolation(t *testing.T) {
 		if err := db.RDB.Set(ctx, fmt.Sprintf("ips:%d:60:json", min), body, time.Minute).Err(); err != nil {
 			t.Fatalf("seed tier %d json: %v", min, err)
 		}
-		if err := db.RDB.Set(ctx, fmt.Sprintf("ips:%d:60:etag", min), fmt.Sprintf(`"tier-%d-etag"`, min), time.Minute).Err(); err != nil {
+		if err := db.RDB.Set(ctx, fmt.Sprintf("ips:%d:60:etag", min), fmt.Sprintf("tier-%d-etag", min), time.Minute).Err(); err != nil {
 			t.Fatalf("seed tier %d etag: %v", min, err)
 		}
 	}

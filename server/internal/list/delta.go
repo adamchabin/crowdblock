@@ -26,7 +26,7 @@ import (
 // Every generation of the lists gets a version (ips:version). For each
 // (min_reporters, minutes) combination the generator also stores:
 //
-//	ips:<c>:meta          {"version", "count", "set_hash"} of the current list
+//	ips:<c>:meta          {"version", "etag", "count", "set_hash"} of the current list
 //	ips:<c>:etags         ZSET etag -> version of the last listHistory generations
 //	ips:<c>:diff:<v>      changes from generation v-1 to v
 //
@@ -34,7 +34,7 @@ import (
 // if that etag is in the history and the diffs are there, the merged changes
 // since then instead of the whole list:
 //
-//	{"etag":"\"…\"","count":5000,"set_hash":"…","remove":["1.2.3.4"],"upsert":[
+//	{"etag":"…","count":5000,"set_hash":"…","remove":["1.2.3.4"],"upsert":[
 //	{"ip":"5.6.7.8","distinct_reporters":3},
 //	…
 //	]}
@@ -42,9 +42,13 @@ import (
 // "upsert" are new entries and entries whose data changed (reporters, country,
 // sources); "remove" left the list. "count" and "set_hash" describe the whole
 // current set, so that the client can check the list it rebuilt (and fetch the
-// full list on a mismatch). Merged deltas are cached per (start, current)
-// version. Anything unusual – unknown etag, missing diffs, a delta bigger than
-// half the list – falls back to the full list.
+// full list on a mismatch). Merged deltas are cached per (start, target,
+// kind) version. Anything unusual – unknown etag, missing diffs, a delta bigger
+// than half the list – falls back to the full list.
+
+// deltaCacheTTL bounds the memory used by cached deltas. The content of a
+// cache entry is fixed by its versions, so it can never be stale.
+const deltaCacheTTL = 10 * time.Minute
 
 // listDiff is the change between two generations of one list.
 type listDiff struct {
@@ -52,9 +56,11 @@ type listDiff struct {
 	Remove []string         `json:"remove"`
 }
 
-// listMeta describes one generation of a list.
+// listMeta describes one generation of a list. Etag is the ETag of the same
+// generation, so that a response never mixes it with another generation.
 type listMeta struct {
 	Version int64  `json:"version"`
+	Etag    string `json:"etag"`
 	Count   int    `json:"count"`
 	SetHash string `json:"set_hash"`
 }
@@ -190,7 +196,7 @@ func gzipBytes(data []byte) ([]byte, error) {
 func storeDeltaData(ctx context.Context, pipe redis.Pipeliner, minReporters, minutes int,
 	version int64, etag string, prev, cur []db.IPListEntry, prevKnown bool, interval time.Duration) error {
 
-	meta, err := json.Marshal(listMeta{Version: version, Count: len(cur), SetHash: setHash(cur)})
+	meta, err := json.Marshal(listMeta{Version: version, Etag: etag, Count: len(cur), SetHash: setHash(cur)})
 	if err != nil {
 		return err
 	}
@@ -216,7 +222,7 @@ func storeDeltaData(ctx context.Context, pipe redis.Pipeliner, minReporters, min
 // serveDelta sends the changes since the client's copy (etag `have`) and
 // returns true, or returns false (nothing written) when the full list must be
 // sent instead.
-func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes int, have, current string) (Meta, bool) {
+func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes int, have string) (Meta, bool) {
 	ctx := r.Context()
 
 	start, err := db.RDB.ZScore(ctx, listKey(minReporters, minutes, "etags"), have).Result()
@@ -226,13 +232,17 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	}
 	from := int64(start)
 
+	// The target is the generation in meta; its ETag comes from the same
+	// key, so the response is consistent with its count and set_hash. Diffs
+	// are immutable per version, so reading them after meta is safe.
 	metaJSON, err := db.RDB.Get(ctx, listKey(minReporters, minutes, "meta")).Bytes()
 	if err != nil {
 		logging.Debugf("delta %d/%d: no meta in Redis (%v), full list", minReporters, minutes, err)
 		return Meta{}, false
 	}
 	var meta listMeta
-	if json.Unmarshal(metaJSON, &meta) != nil || from >= meta.Version || meta.Version-from > listHistory {
+	if json.Unmarshal(metaJSON, &meta) != nil || meta.Etag == "" || meta.Etag == have ||
+		from >= meta.Version || meta.Version-from > listHistory {
 		logging.Debugf("delta %d/%d: client at version %d, current %d: out of range, full list", minReporters, minutes, from, meta.Version)
 		return Meta{}, false
 	}
@@ -244,22 +254,34 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	}
 	cacheKey := listKey(minReporters, minutes, fmt.Sprintf("delta:%d:%d:%s", from, meta.Version, kind))
 
-	// Cached per (start, current) version: many routers share a start
-	// version. An empty value caches the decision to send the full list.
+	// Cached per (start, target, kind): many routers share a start version.
+	// An empty body caches the decision to send the full list. The body and
+	// its record count are read in one MGET, so they always match.
+	var body []byte
 	var records int
-	body, err := db.RDB.Get(ctx, cacheKey).Bytes()
-	if err != nil {
-		body, records, err = buildDelta(ctx, minReporters, minutes, from, current, meta, gzipped)
+	hit := false
+	if vals, err := db.RDB.MGet(ctx, cacheKey, cacheKey+":records").Result(); err == nil {
+		if s, ok := vals[0].(string); ok {
+			body, hit = []byte(s), true
+		}
+		if s, ok := vals[1].(string); ok {
+			records, _ = strconv.Atoi(s)
+		}
+	}
+	if hit {
+		logging.Debugf("delta %d/%d: %d -> %d from cache (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
+	} else {
+		body, records, err = buildDelta(ctx, minReporters, minutes, from, meta, gzipped)
 		if err != nil {
 			logging.Debugf("delta %d/%d: %d -> %d failed: %v, full list", minReporters, minutes, from, meta.Version, err)
 			return Meta{}, false
 		}
-		_ = db.RDB.Set(ctx, cacheKey, body, 2*listRefreshInterval()).Err()
-		_ = db.RDB.Set(ctx, cacheKey+":records", records, 2*listRefreshInterval()).Err()
+		_, _ = db.RDB.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Set(ctx, cacheKey, body, deltaCacheTTL)
+			pipe.Set(ctx, cacheKey+":records", records, deltaCacheTTL)
+			return nil
+		})
 		logging.Debugf("delta %d/%d: %d -> %d built and cached (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
-	} else {
-		records, _ = db.RDB.Get(ctx, cacheKey+":records").Int()
-		logging.Debugf("delta %d/%d: %d -> %d from cache (%dB %s)", minReporters, minutes, from, meta.Version, len(body), kind)
 	}
 	if len(body) == 0 {
 		logging.Debugf("delta %d/%d: %d -> %d not worth it, full list", minReporters, minutes, from, meta.Version)
@@ -269,7 +291,7 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Add("Vary", "Accept-Encoding")
-	h.Set("ETag", current)
+	h.Set("ETag", meta.Etag)
 	h.Set("Cache-Control", "no-cache")
 	if gzipped {
 		h.Set("Content-Encoding", "gzip")
@@ -281,7 +303,7 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 		Kind:     "diff",
 		Encoding: map[bool]string{true: "gzip", false: "plain"}[gzipped],
 		Records:  records,
-		ETag:     current,
+		ETag:     meta.Etag,
 	}, true
 }
 
@@ -289,7 +311,7 @@ func serveDelta(w http.ResponseWriter, r *http.Request, minReporters, minutes in
 // nil when a diff is missing or the delta isn't worth it (the full list is
 // smaller to apply).
 // It also returns the number of upserted addresses, for the request log.
-func buildDelta(ctx context.Context, minReporters, minutes int, from int64, current string,
+func buildDelta(ctx context.Context, minReporters, minutes int, from int64,
 	meta listMeta, gzipped bool) ([]byte, int, error) {
 
 	keys := make([]string, 0, meta.Version-from)
@@ -317,7 +339,7 @@ func buildDelta(ctx context.Context, minReporters, minutes int, from int64, curr
 		return nil, 0, nil
 	}
 
-	body, err := encodeDelta(current, meta, d)
+	body, err := encodeDelta(meta.Etag, meta, d)
 	if err != nil {
 		return nil, 0, err
 	}
