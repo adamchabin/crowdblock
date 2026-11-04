@@ -10,26 +10,7 @@ import (
 )
 
 type Config struct {
-	Threathive    Threathive     `yaml:"threathive"`
 	ExternalLists []ExternalList `yaml:"external_lists"`
-}
-
-type Threathive struct {
-	// Enabled turns on periodic import of the Threathive blocklist.
-	Enabled bool `yaml:"enabled"`
-
-	// URL of the plain-text blocklist (one IP per line).
-	URL string `yaml:"url"`
-
-	// Interval between imports (Go duration string, e.g. 3h).
-	Interval string `yaml:"interval"`
-
-	// Source name stored with every imported report.
-	Source string `yaml:"source"`
-
-	// Report window stored with every imported report (not used directly;
-    // kept for documentation / future use).
-	ReportWindow string `yaml:"report_window"`
 }
 
 // ExternalList describes one external blocklist to import periodically.
@@ -47,7 +28,7 @@ type ExternalList struct {
 	Source string `yaml:"source"`
 
 	// Report window stored with every imported report (not used directly;
-    // kept for documentation / future use).
+	// kept for documentation / future use).
 	ReportWindow string `yaml:"report_window"`
 
 	// Format of the list file. Currently only "plain" (one IP per line,
@@ -71,20 +52,6 @@ func Load(path string) (*Config, error) {
 	var c Config
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, err
-	}
-
-	// Threathive defaults (legacy section, kept for backwards compatibility).
-	if c.Threathive.URL == "" {
-		c.Threathive.URL = "https://threathive.net/hiveblocklist.txt"
-	}
-	if c.Threathive.Interval == "" {
-		c.Threathive.Interval = "3h"
-	}
-	if c.Threathive.Source == "" {
-		c.Threathive.Source = "threathive.net"
-	}
-	if c.Threathive.ReportWindow == "" {
-		c.Threathive.ReportWindow = "6h"
 	}
 
 	// External lists defaults.

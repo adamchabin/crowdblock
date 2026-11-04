@@ -18,10 +18,10 @@ import (
 	"server/config"
 	"server/internal/api"
 	"server/internal/db"
+	"server/internal/externallist"
 	"server/internal/geoip"
 	"server/internal/list"
 	"server/internal/logging"
-	"server/internal/externallist"
 
 	"golang.org/x/sync/errgroup"
 )

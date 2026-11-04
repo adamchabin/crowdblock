@@ -273,38 +273,38 @@ var ErrNoRows = pgx.ErrNoRows
 
 // AdminUser represents a user in the admin panel.
 type AdminUser struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	IsAdmin   bool      `json:"is_admin"`
-	CreatedAt time.Time `json:"created_at"`
-	KeyCount  int       `json:"key_count"`
-	ReportCount int     `json:"report_count"`
+	ID          string    `json:"id"`
+	Email       string    `json:"email"`
+	IsAdmin     bool      `json:"is_admin"`
+	CreatedAt   time.Time `json:"created_at"`
+	KeyCount    int       `json:"key_count"`
+	ReportCount int       `json:"report_count"`
 }
 
 // AdminAPIKey represents an API key in the admin panel.
 type AdminAPIKey struct {
-	ID        string     `json:"id"`
-	UserID    string     `json:"user_id"`
-	UserEmail string     `json:"user_email"`
-	Prefix    string     `json:"prefix"`
-	Name      string     `json:"name"`
-	CreatedAt time.Time  `json:"created_at"`
-	RevokedAt *time.Time `json:"revoked_at,omitempty"`
-	ReportCount int      `json:"report_count"`
+	ID          string     `json:"id"`
+	UserID      string     `json:"user_id"`
+	UserEmail   string     `json:"user_email"`
+	Prefix      string     `json:"prefix"`
+	Name        string     `json:"name"`
+	CreatedAt   time.Time  `json:"created_at"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+	ReportCount int        `json:"report_count"`
 }
 
 // AdminReport represents an IP report in the admin panel.
 type AdminReport struct {
-	ID          int64     `json:"id"`
-	IP          string    `json:"ip"`
-	UserID      string    `json:"user_id"`
-	UserEmail   string    `json:"user_email"`
-	APIKeyID    string    `json:"api_key_id"`
+	ID           int64     `json:"id"`
+	IP           string    `json:"ip"`
+	UserID       string    `json:"user_id"`
+	UserEmail    string    `json:"user_email"`
+	APIKeyID     string    `json:"api_key_id"`
 	APIKeyPrefix string    `json:"api_key_prefix"`
-	Source      string    `json:"source"`
-	ReportedAt  time.Time `json:"reported_at"`
-	Country     string    `json:"country"`
-	CountryName string    `json:"country_name"`
+	Source       string    `json:"source"`
+	ReportedAt   time.Time `json:"reported_at"`
+	Country      string    `json:"country"`
+	CountryName  string    `json:"country_name"`
 }
 
 // AdminListOptions holds pagination and filter options for admin lists.

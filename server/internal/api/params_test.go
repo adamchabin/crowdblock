@@ -12,16 +12,16 @@ import (
 
 func TestParseListParams(t *testing.T) {
 	for query, want := range map[string]string{
-		"min_reporters=5&minutes=360":            "ok 5 360 0",
-		"min_reporters=1&minutes=60":             "ok 1 60 0",
-		"min_reporters=50&minutes=10080":         "ok 50 10080 0",
-		"min_reporters=5&minutes=360&limit=5000": "ok 5 360 5000",
-		"min_reporters=5&minutes=360&limit=0":    "ok 5 360 0",
-		"min_reporters=3&minutes=360":            "invalid data (min_reporters must be one of [1 5 10 20 50])",
-		"min_reporters=5&minutes=30":             "invalid data (minutes must be one of [60 360 1440 10080])",
-		"min_reporters=x&minutes=360":            "invalid data (min_reporters must be one of [1 5 10 20 50])",
-		"minutes=360":                            "invalid data (min_reporters must be one of [1 5 10 20 50])",
-		"min_reporters=5&minutes=360&limit=99999":"invalid data (limit must be one of [0 5000 10000 50000 100000 250000 500000])",
+		"min_reporters=5&minutes=360":             "ok 5 360 0",
+		"min_reporters=1&minutes=60":              "ok 1 60 0",
+		"min_reporters=50&minutes=10080":          "ok 50 10080 0",
+		"min_reporters=5&minutes=360&limit=5000":  "ok 5 360 5000",
+		"min_reporters=5&minutes=360&limit=0":     "ok 5 360 0",
+		"min_reporters=3&minutes=360":             "invalid data (min_reporters must be one of [1 5 10 20 50])",
+		"min_reporters=5&minutes=30":              "invalid data (minutes must be one of [60 360 1440 10080])",
+		"min_reporters=x&minutes=360":             "invalid data (min_reporters must be one of [1 5 10 20 50])",
+		"minutes=360":                             "invalid data (min_reporters must be one of [1 5 10 20 50])",
+		"min_reporters=5&minutes=360&limit=99999": "invalid data (limit must be one of [0 5000 10000 50000 100000 250000 500000])",
 	} {
 		q, _ := url.ParseQuery(query)
 		r, m, l, err := parseListParams(q)

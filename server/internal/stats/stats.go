@@ -17,17 +17,17 @@ import (
 
 // Aggregates only: no addresses and no user data, so the endpoint is public.
 type response struct {
-	GeneratedAt    time.Time      `json:"generated_at"`
-	Users          int            `json:"users"`
-	ActiveKeys     int            `json:"active_keys"`
-	Reports24h     int            `json:"reports_24h"`
-	Reports7d      int            `json:"reports_7d"`
-	UniqueIPs24h   int            `json:"unique_ips_24h"`
+	GeneratedAt  time.Time `json:"generated_at"`
+	Users        int       `json:"users"`
+	ActiveKeys   int       `json:"active_keys"`
+	Reports24h   int       `json:"reports_24h"`
+	Reports7d    int       `json:"reports_7d"`
+	UniqueIPs24h int       `json:"unique_ips_24h"`
 
-	Hourly         []int          `json:"hourly"`          // reports per hour, last 24 h, oldest first
-	Sources        map[string]int `json:"sources"`         // reports 24 h by source
-	Countries      []countryCount `json:"countries"`       // top 10 by reported IPs, 24 h
-	Cache          cacheStats     `json:"cache"`
+	Hourly    []int          `json:"hourly"`    // reports per hour, last 24 h, oldest first
+	Sources   map[string]int `json:"sources"`   // reports 24 h by source
+	Countries []countryCount `json:"countries"` // top 10 by reported IPs, 24 h
+	Cache     cacheStats     `json:"cache"`
 }
 
 // cacheStats holds the counters of the API key cache and the list cache.
