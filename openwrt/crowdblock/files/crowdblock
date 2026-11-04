@@ -430,11 +430,12 @@ function sync(cfg) {
 	if (refresh_due && refresh_full)
 		how += sprintf(' [nft full reload: %s]', table_new ? 'table recreated' : (due_reason ?? (res.delta ? 'delta failed' : 'full list')));
 
-	info('sync ok%s: %d blocked (%d below min_reports, %d invalid%s, etag %s)',
+	info('sync ok%s: %d blocked (%d below min_reports, %d invalid%s, etag %s) in %d ms',
 		how, count, stats.below, stats.invalid,
 		stats.over ? sprintf(', %d dropped: max_entries reached', stats.over) : '',
-		replace(sync_state.list_etag ?? '-', '"', ''));
-	debug(cfg, 'sync: done in %d ms', elapsed_ms(start));
+		replace(sync_state.list_etag ?? '-', '"', ''),
+		elapsed_ms(start));
+	debug(cfg, 'DEBUG');
 	return true;
 }
 
