@@ -141,7 +141,7 @@ return view.extend({
 		o.datatype = 'range(1,1024)';
 		o.placeholder = '8';
 
-	o = s.taboption('advanced', form.Flag, 'keep_batch_nft', _('Keep batch.nft (for debugging)'),
+		o = s.taboption('advanced', form.Flag, 'keep_batch_nft', _('Keep batch.nft'),
 		_('Do not delete /tmp/crowdblock/batch.nft after uploading it to nftables. Useful for debugging.'));
 
 		o = s.taboption('advanced', form.Flag, 'debug', _('Debug'),
