@@ -2,6 +2,16 @@ services:
   postgres:
     image: postgres:16
     container_name: pg
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_parallel_workers_per_gather=4
     environment:
       POSTGRES_USER: postgres
       # FIXME(adam): default password and 5432/6379 published on all interfaces - bind to 127.0.0.1, add REDIS_PASSWORD (security.md #2, #7).
@@ -20,6 +30,16 @@ services:
   redis:
     image: redis:7
     container_name: redis
+    command:
+      - redis-server
+      - --maxmemory
+      - 2gb
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - ""
+      - --io-threads
+      - "2"
     ports:
       - "6379:6379"
     healthcheck:

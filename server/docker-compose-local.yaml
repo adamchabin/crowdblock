@@ -1,6 +1,16 @@
 services:
   postgres:
     image: postgres:16
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_parallel_workers_per_gather=4
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
@@ -17,6 +27,16 @@ services:
 
   redis:
     image: redis:7
+    command:
+      - redis-server
+      - --maxmemory
+      - 2gb
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - ""
+      - --io-threads
+      - "2"
     ports:
       - "6379:6379"
     healthcheck:

@@ -71,3 +71,7 @@ CREATE TABLE IF NOT EXISTS blacklist (
 
 -- Admin flag for users; existing databases get it via ALTER below.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- The pruner deletes rows every hour; vacuum sooner than the 20% default so the
+-- table does not grow with dead rows.
+ALTER TABLE ip_reports SET (autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.02);
