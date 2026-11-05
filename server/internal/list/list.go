@@ -274,8 +274,8 @@ func GenerateLists(ctx context.Context, instance string, interval time.Duration)
 					return err
 				}
 
-				logging.Debugf("lists: round %d list %d/%d: %d addresses, etag %s, %dB plain / %dB gzip",
-					version, min, minutes, len(entries[minutes][min]), p.etag, len(p.plain), len(p.gz))
+				logging.Debugf("lists: round %d list %d/%d: %d addresses, etag %s, %s plain / %s gzip",
+					version, min, minutes, len(entries[minutes][min]), p.etag, formatBytes(len(p.plain)), formatBytes(len(p.gz)))
 			}
 		}
 		return nil
