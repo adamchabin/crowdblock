@@ -10,11 +10,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -77,6 +79,47 @@ type listPayload struct {
 	count int // addresses in the list, sent as records= in the request log
 }
 
+// formatBytes returns a human-readable string for byte count
+// (e.g. 1024 -> "1.0KB", 1500 -> "1.5KB", 1048576 -> "1.0MB").
+// Used by the debug log of the list generator. Missing on dev at afdbe9a.
+func formatBytes(b int) string {
+	const (
+		KB = 1024
+		MB = 1024 * 1024
+	)
+	switch {
+	case b >= MB:
+		return fmt.Sprintf("%.1fMB", float64(b)/MB)
+	case b >= KB:
+		return fmt.Sprintf("%.1fKB", float64(b)/KB)
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
+}
+
+// gzipPool holds gzip writers for reuse: each one allocates a few hundred KB
+// of compressor state, and a round compresses 40 payloads.
+var gzipPool = sync.Pool{New: func() any {
+	zw, _ := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
+	return zw
+}}
+
+// gzipCompress compresses data with gzip at BestSpeed. The lists are rebuilt
+// every round, so the CPU saved matters more than the ~15% larger output.
+func gzipCompress(data []byte) ([]byte, error) {
+	var b bytes.Buffer
+	zw := gzipPool.Get().(*gzip.Writer)
+	defer gzipPool.Put(zw)
+	zw.Reset(&b)
+	if _, err := zw.Write(data); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
 // listKey returns the Redis key of one list version/kind.
 func listKey(minReporters, minutes int, kind string) string {
 	return fmt.Sprintf("ips:%d:%d:%s", minReporters, minutes, kind)
@@ -135,12 +178,8 @@ func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 	}
 	plain := bytes.NewBuffer(encoded)
 
-	var gz bytes.Buffer
-	zw := gzip.NewWriter(&gz)
-	if _, err := zw.Write(plain.Bytes()); err != nil {
-		return listPayload{}, err
-	}
-	if err := zw.Close(); err != nil {
+	gz, err := gzipCompress(plain.Bytes())
+	if err != nil {
 		return listPayload{}, err
 	}
 
@@ -150,7 +189,7 @@ func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 	sum := sha256.Sum256(plain.Bytes())
 	return listPayload{
 		plain: plain.Bytes(),
-		gz:    gz.Bytes(),
+		gz:    gz,
 		etag:  hex.EncodeToString(sum[:8]),
 		count: len(entries),
 	}, nil
@@ -239,13 +278,15 @@ func GenerateLists(ctx context.Context, instance string, interval time.Duration)
 	lists := map[int]map[int]listPayload{}        // minutes -> min_reporters -> list
 	entries := map[int]map[int][]db.IPListEntry{} // the same, decoded
 	n := 0
+	queryStart := time.Now()
+	windows, err := db.QueryIPListWindows(ctx, AllowedMinutes)
+	if err != nil {
+		return 0, fmt.Errorf("query windows: %w", err)
+	}
+	logging.Debugf("lists: round %d all windows query: %s", version, time.Since(queryStart).Round(time.Microsecond))
 	for _, minutes := range AllowedMinutes {
-		queryStart := time.Now()
-		all, err := db.QueryIPList(ctx, minutes, 1, 0)
-		if err != nil {
-			return 0, fmt.Errorf("query (minutes=%d): %w", minutes, err)
-		}
-		logging.Debugf("lists: round %d window %dm: %d addresses, query %s", version, minutes, len(all), time.Since(queryStart).Round(time.Microsecond))
+		all := windows[minutes]
+		logging.Debugf("lists: round %d window %dm: %d addresses", version, minutes, len(all))
 		if lists[minutes], err = buildLists(all); err != nil {
 			return 0, err
 		}

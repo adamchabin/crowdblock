@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"syscall"
@@ -41,6 +42,25 @@ func setupLogging() {
 func main() {
 	setupLogging()
 	slog.Info("starting server", "version", version)
+
+	// Diagnostics only: CPU_PROFILE=<file> writes a CPU profile until shutdown.
+	// Analyze with: go tool pprof -top <binary> <file>
+	if path := os.Getenv("CPU_PROFILE"); path != "" {
+		f, err := os.Create(path)
+		if err != nil {
+			slog.Error("cannot create CPU profile", "path", path, "err", err)
+			os.Exit(1)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			slog.Error("cannot start CPU profile", "err", err)
+			os.Exit(1)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			_ = f.Close()
+			slog.Info("CPU profile written", "path", path)
+		}()
+	}
 
 	cfgPath := os.Getenv("CONFIG_PATH")
 	if cfgPath == "" {
