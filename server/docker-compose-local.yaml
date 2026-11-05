@@ -10,7 +10,7 @@ services:
       - -c
       - random_page_cost=1.1
       - -c
-      - max_parallel_workers_per_gather=4
+      - max_parallel_workers_per_gather=2
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
