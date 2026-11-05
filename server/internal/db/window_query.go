@@ -44,6 +44,11 @@ func QueryIPListWindows(ctx context.Context, windows []int) (map[int][]IPListEnt
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only transaction, nothing to undo
+	// The two scans sort large sets; with the default 4 MB they spill to disk.
+	// SET LOCAL lasts for this transaction only.
+	if _, err := tx.Exec(ctx, `SET LOCAL work_mem = '256MB'`); err != nil {
+		return nil, err
+	}
 
 	var now time.Time
 	if err := tx.QueryRow(ctx, `SELECT now()`).Scan(&now); err != nil {
@@ -163,8 +168,14 @@ func QueryIPListWindows(ctx context.Context, windows []int) (map[int][]IPListEnt
 		geos[r.ip] = geo{addr: addr, country: code, name: name}
 	}
 
+	// The address is kept next to each entry for the sort, so the comparator
+	// does not look up the map on every comparison.
+	type ranked struct {
+		e    IPListEntry
+		addr netip.Addr
+	}
 	for i, w := range windows {
-		var entries []IPListEntry
+		var rs []ranked
 		for _, r := range reporters {
 			if r.counts[i] < 1 {
 				continue
@@ -183,16 +194,17 @@ func QueryIPListWindows(ctx context.Context, windows []int) (map[int][]IPListEnt
 				}
 				slices.Sort(e.Sources)
 			}
-			entries = append(entries, e)
+			rs = append(rs, ranked{e: e, addr: g.addr})
 		}
-		slices.SortFunc(entries, func(a, b IPListEntry) int {
-			if a.DistinctReporters != b.DistinctReporters {
-				return b.DistinctReporters - a.DistinctReporters
+		slices.SortFunc(rs, func(a, b ranked) int {
+			if a.e.DistinctReporters != b.e.DistinctReporters {
+				return b.e.DistinctReporters - a.e.DistinctReporters
 			}
-			return geos[a.IP].addr.Compare(geos[b.IP].addr)
+			return a.addr.Compare(b.addr)
 		})
-		if entries == nil {
-			entries = []IPListEntry{}
+		entries := make([]IPListEntry, len(rs))
+		for j := range rs {
+			entries[j] = rs[j].e
 		}
 		out[w] = entries
 	}

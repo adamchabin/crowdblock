@@ -168,3 +168,43 @@ After each change:
   content of every window and tier).
 - Load: `cmd/loadgen` plus `k6/lists.js` / `k6/mixed.js` against a test instance
   with `RATE_LIMIT_DISABLED=true`; compare the round times in the `DEBUG` log.
+
+## Round measurements (real server, 4 M rows, Postgres 16 + Redis, GeoIP db-ip lite)
+
+Two rounds of each binary against the same database, `DEBUG=true`, `LIST_REFRESH=1m`,
+`shared_buffers=512MB`, `work_mem=4MB` (same as production). Round 1 is cold, round 2 warm.
+
+| | query, all windows | round total | query per window (old) |
+|---|---|---|---|
+| dev-based (old) round 2 | - | 10.0 s | 60m 0.10 s, 6h 0.50 s, 24h 1.15 s, 7d 5.57 s (sum 7.3 s) |
+| new round 2 | 6.8 s | 10.0 s | - |
+| new round 3 | 6.0 s | ~10 s | - |
+
+Findings:
+
+- The two-scan query saves about 0.5-1 s of query time, not the ~8 s estimated. The
+  earlier estimate came from psql runs with a warm cache and a different setting.
+- The 4 MB `work_mem` makes both scans sort on disk (`external merge`).
+  In psql, `SET LOCAL work_mem = '256MB'` brings the pairs query from ~3.0 s to 2.6 s
+  and the sources query from ~1.5 s to 1.7 s (in memory). A small change, but it
+  removes the disk I/O from the sort.
+- The round total did not change (10 s before and after). Query time is about 2/3 of the
+  round; the remaining ~3 s (GeoIP, list encoding, gzip, diff, Redis write) is not covered yet.
+  Profiling is needed to rank it, and the server has no pprof endpoint.
+
+## CPU profile of the generator (4 M rows, 3 rounds, `CPU_PROFILE`)
+
+Total CPU 20.7 s over 150 s (the rest is waiting for Postgres and Redis). Of that,
+`GenerateLists` is 16.9 s, about 5.6 s per round:
+
+| share of GenerateLists | cost | where |
+|---|---|---|
+| 40 % | `QueryIPListWindows` | 2.6 s is the sort comparator, which does a map lookup (`geos[...]`) per comparison (`runtime.mapaccess1_faststr` 2.8 s). Fix: keep the `netip.Addr` in the entry slice, or sort by a precomputed rank. |
+| 21 % | `NewListPayload` | gzip at the default level 2.2 s; `json.Marshal` per entry in `encodeList` 2.0 s. Fix: `gzip.BestSpeed` plus pooled writers; encode once and cut prefixes. |
+| 11 % | `previousLists` | `json.Unmarshal` of 20 lists 2.3 s. Fix: keep the previous generation in memory. |
+| 11 % | `storeDeltaData` | `computeDiff` 1.5 s (maps and `reflect.DeepEqual`). Fix: compute once on min=1, hand-written equality. |
+| 7 % | `geoip.CountryOf` | 1.4 s for ~200 k unique IPs per round. Fix: decode only `iso_code`, memoize names. |
+| 15 % | GC | 3.2 s; mostly the allocations above. |
+
+Priorities by CPU per round (approximate): sort comparator ~0.9 s, gzip ~0.7 s, JSON
+encode ~0.7 s, previous-list decode ~0.8 s, diff ~0.5 s, GeoIP ~0.5 s.

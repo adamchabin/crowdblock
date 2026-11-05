@@ -10,11 +10,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -95,6 +97,29 @@ func formatBytes(b int) string {
 	}
 }
 
+// gzipPool holds gzip writers for reuse: each one allocates a few hundred KB
+// of compressor state, and a round compresses 40 payloads.
+var gzipPool = sync.Pool{New: func() any {
+	zw, _ := gzip.NewWriterLevel(io.Discard, gzip.BestSpeed)
+	return zw
+}}
+
+// gzipCompress compresses data with gzip at BestSpeed. The lists are rebuilt
+// every round, so the CPU saved matters more than the ~15% larger output.
+func gzipCompress(data []byte) ([]byte, error) {
+	var b bytes.Buffer
+	zw := gzipPool.Get().(*gzip.Writer)
+	defer gzipPool.Put(zw)
+	zw.Reset(&b)
+	if _, err := zw.Write(data); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
 // listKey returns the Redis key of one list version/kind.
 func listKey(minReporters, minutes int, kind string) string {
 	return fmt.Sprintf("ips:%d:%d:%s", minReporters, minutes, kind)
@@ -153,12 +178,8 @@ func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 	}
 	plain := bytes.NewBuffer(encoded)
 
-	var gz bytes.Buffer
-	zw := gzip.NewWriter(&gz)
-	if _, err := zw.Write(plain.Bytes()); err != nil {
-		return listPayload{}, err
-	}
-	if err := zw.Close(); err != nil {
+	gz, err := gzipCompress(plain.Bytes())
+	if err != nil {
 		return listPayload{}, err
 	}
 
@@ -168,7 +189,7 @@ func NewListPayload(entries []db.IPListEntry) (listPayload, error) {
 	sum := sha256.Sum256(plain.Bytes())
 	return listPayload{
 		plain: plain.Bytes(),
-		gz:    gz.Bytes(),
+		gz:    gz,
 		etag:  hex.EncodeToString(sum[:8]),
 		count: len(entries),
 	}, nil

@@ -2,7 +2,6 @@ package list
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -180,15 +179,7 @@ func encodeDelta(etag string, meta listMeta, d listDiff) ([]byte, error) {
 
 // gzipBytes compresses data with gzip.
 func gzipBytes(data []byte) ([]byte, error) {
-	var b bytes.Buffer
-	zw := gzip.NewWriter(&b)
-	if _, err := zw.Write(data); err != nil {
-		return nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
+	return gzipCompress(data)
 }
 
 // storeDeltaData queues, for one list of a new generation, its meta, its etag
